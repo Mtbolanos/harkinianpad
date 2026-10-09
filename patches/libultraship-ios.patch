@@ -960,10 +960,10 @@ index 00000000..22b71c35
 +} // namespace Ship
 diff --git a/include/ship/window/gui/IOSTouchScroll.h b/include/ship/window/gui/IOSTouchScroll.h
 new file mode 100644
-index 00000000..282cf7fb
+index 00000000..ef23d773
 --- /dev/null
 +++ b/include/ship/window/gui/IOSTouchScroll.h
-@@ -0,0 +1,28 @@
+@@ -0,0 +1,29 @@
 +#pragma once
 +
 +#ifdef __IOS__
@@ -974,9 +974,10 @@ index 00000000..282cf7fb
 +/**
 + * @brief Filters touch-generated mouse events before they reach ImGui.
 + *
-+ * A touch press is held back until its intent is clear: a mostly vertical drag (or a horizontal drag
-+ * over a window that scrolls sideways) scrolls and is never delivered, so it cannot press a button or
-+ * move a slider; any other drag, or a tap, is delivered from the original press point.
++ * A touch press is held back until its intent is clear. A drag scrolls unless it is clearly sideways
++ * (then it goes to the widget, e.g. a slider, or scrolls a window that scrolls sideways); a scroll is
++ * never delivered, so it cannot press a button or move a slider. A finger held still only hovers
++ * (tooltips), and a tap is delivered on release. Presses on a scrollbar are not filtered.
 + *
 + * @param event   The SDL event about to be passed to ImGui.
 + * @param forward Function that hands an event to ImGui (ImGui_ImplSDL2_ProcessEvent).
@@ -2215,10 +2216,10 @@ index 1f9279bd..43defe56 100644
  void Gui::EndFrame() {
 diff --git a/src/ship/window/gui/IOSTouchScroll.cpp b/src/ship/window/gui/IOSTouchScroll.cpp
 new file mode 100644
-index 00000000..517613a9
+index 00000000..660de942
 --- /dev/null
 +++ b/src/ship/window/gui/IOSTouchScroll.cpp
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,245 @@
 +#ifdef __IOS__
 +#include "ship/window/gui/IOSTouchScroll.h"
 +
@@ -2233,9 +2234,11 @@ index 00000000..517613a9
 +namespace {
 +enum class State { Idle, Pending, Scrolling, Delivered };
 +
-+constexpr float kStartThreshold = 10.0f; // points of travel before a touch counts as a drag
-+constexpr float kMinGlideSpeed = 30.0f;  // points per second
-+constexpr Uint32 kHoldDelayMs = 150;     // a still finger is handed to the widget after this (like UIScrollView)
++constexpr float kStartThreshold = 10.0f;      // vertical travel (points) before a touch counts as a scroll
++constexpr float kHorizontalThreshold = 14.0f; // horizontal travel (points) before a touch goes to a slider
++constexpr float kHorizontalRatio = 2.0f;      // a drag must be this many times wider than tall to be sideways
++constexpr float kMinGlideSpeed = 30.0f;       // points per second
++constexpr Uint32 kHoverDelayMs = 150;         // a still finger then hovers (tooltips) without pressing
 +
 +State sState = State::Idle;
 +SDL_Event sPress = {};
@@ -2245,6 +2248,7 @@ index 00000000..517613a9
 +float sPendingDelta[2] = { 0.0f, 0.0f };          // scroll accumulated by events, applied next frame
 +ImGuiWindow* sTarget[2] = { nullptr, nullptr };   // scrollable windows under the press, per axis
 +bool sTargetsKnown = false;
++bool sHovered = false;
 +bool sGliding = false;
 +float sVelocity = 0.0f;
 +bool (*sForward)(const SDL_Event*) = nullptr;
@@ -2262,6 +2266,41 @@ index 00000000..517613a9
 +bool WindowAlive(ImGuiWindow* window) {
 +    ImGuiContext* g = ImGui::GetCurrentContext();
 +    return window != nullptr && g != nullptr && g->Windows.contains(window) && window->WasActive;
++}
++
++void DeliverHover(bool (*forward)(const SDL_Event*)) {
++    SDL_Event motion = {};
++    motion.type = SDL_MOUSEMOTION;
++    motion.motion.timestamp = SDL_GetTicks();
++    motion.motion.windowID = sPress.button.windowID;
++    motion.motion.which = SDL_TOUCH_MOUSEID;
++    motion.motion.x = sPress.button.x;
++    motion.motion.y = sPress.button.y;
++    forward(&motion);
++}
++
++// Scrollbars keep ImGui's own drag (grab the bar, move the finger with it), so a press on one is not filtered.
++bool IsOverScrollbar(float x, float y) {
++    if (ImGui::GetCurrentContext() == nullptr) {
++        return false;
++    }
++    ImGuiWindow* hovered = nullptr;
++    ImGuiWindow* underMoving = nullptr;
++    ImGui::FindHoveredWindowEx(ImVec2(x, y), false, &hovered, &underMoving);
++    if (hovered == nullptr) {
++        return false;
++    }
++    const ImVec2 pad = ImGui::GetStyle().TouchExtraPadding;
++    for (int axis = 0; axis < 2; axis++) {
++        if (axis == ImGuiAxis_X ? hovered->ScrollbarX : hovered->ScrollbarY) {
++            ImRect bar = ImGui::GetWindowScrollbarRect(hovered, (ImGuiAxis)axis);
++            bar.Expand(pad);
++            if (bar.Contains(ImVec2(x, y))) {
++                return true;
++            }
++        }
++    }
++    return false;
 +}
 +
 +void DeliverPress(bool (*forward)(const SDL_Event*)) {
@@ -2297,6 +2336,12 @@ index 00000000..517613a9
 +
 +    switch (event->type) {
 +        case SDL_MOUSEBUTTONDOWN:
++            if (IsOverScrollbar((float)event->button.x, (float)event->button.y)) {
++                sState = State::Delivered;
++                sAxis = -1;
++                sGliding = false;
++                return false;
++            }
 +            sState = State::Pending;
 +            sPress = *event;
 +            sStartX = (float)event->button.x;
@@ -2305,6 +2350,7 @@ index 00000000..517613a9
 +            sPendingDelta[0] = sPendingDelta[1] = 0.0f;
 +            sTarget[0] = sTarget[1] = nullptr;
 +            sTargetsKnown = false;
++            sHovered = false;
 +            sGliding = false;
 +            sVelocity = 0.0f;
 +            return true;
@@ -2313,11 +2359,8 @@ index 00000000..517613a9
 +            if (sState == State::Pending) {
 +                const float dx = (float)event->motion.x - sStartX;
 +                const float dy = (float)event->motion.y - sStartY;
-+                if (std::fabs(dy) > kStartThreshold && std::fabs(dy) >= std::fabs(dx)) {
-+                    sState = State::Scrolling;
-+                    sAxis = 1;
-+                    sPendingDelta[1] += -dy;
-+                } else if (std::fabs(dx) > kStartThreshold && std::fabs(dx) > std::fabs(dy)) {
++                // Biased towards scrolling: only a clearly sideways drag reaches a slider.
++                if (std::fabs(dx) > kHorizontalThreshold && std::fabs(dx) > kHorizontalRatio * std::fabs(dy)) {
 +                    if (sTargetsKnown && sTarget[0] != nullptr) {
 +                        sState = State::Scrolling;
 +                        sAxis = 0;
@@ -2328,6 +2371,10 @@ index 00000000..517613a9
 +                        forward(event);
 +                        sState = State::Delivered;
 +                    }
++                } else if (std::fabs(dy) > kStartThreshold) {
++                    sState = State::Scrolling;
++                    sAxis = 1;
++                    sPendingDelta[1] += -dy;
 +                }
 +                return true;
 +            }
@@ -2361,11 +2408,11 @@ index 00000000..517613a9
 +void UpdateFrame() {
 +    ImGuiIO& io = ImGui::GetIO();
 +
-+    // A finger held still is a press on the widget, so hold-to-repeat buttons and long presses work.
-+    if (sState == State::Pending && sForward != nullptr &&
-+        SDL_TICKS_PASSED(SDL_GetTicks(), sPress.button.timestamp + kHoldDelayMs)) {
-+        DeliverPress(sForward);
-+        sState = State::Delivered;
++    // A finger held still only hovers: tooltips and highlights show, but nothing is pressed until it lifts.
++    if (sState == State::Pending && !sHovered && sForward != nullptr &&
++        SDL_TICKS_PASSED(SDL_GetTicks(), sPress.button.timestamp + kHoverDelayMs)) {
++        DeliverHover(sForward);
++        sHovered = true;
 +    }
 +
 +    if ((sState == State::Pending || sState == State::Scrolling) && !sTargetsKnown) {
