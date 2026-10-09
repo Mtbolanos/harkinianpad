@@ -656,45 +656,18 @@ index eb93fea4..644bcc26 100644
 \ No newline at end of file
 +include(${CMAKE_IOS_TOOLCHAIN_FILE})
 diff --git a/include/fast/backends/gfx_metal.h b/include/fast/backends/gfx_metal.h
-index 1d452102..ae772e1c 100644
+index 1d452102..d769eb1b 100644
 --- a/include/fast/backends/gfx_metal.h
 +++ b/include/fast/backends/gfx_metal.h
-@@ -12,6 +12,12 @@
- 
- #include <imgui_impl_sdl2.h>
- #include <simd/simd.h>
-+#include <atomic>
-+#include <mutex>
-+#include <set>
-+#include <string>
-+#include <thread>
-+#include <vector>
- 
- static constexpr size_t kMaxVertexBufferPoolSize = 3;
- static constexpr size_t METAL_MAX_MULTISAMPLE_SAMPLE_COUNT = 8;
-@@ -29,6 +35,8 @@ class Device;
+@@ -29,6 +29,7 @@ class Device;
  class Function;
  class Buffer;
  class RenderPipelineState;
-+class RenderPipelineDescriptor;
 +class DepthStencilState;
  class ComputePipelineState;
  class CommandQueue;
  class Viewport;
-@@ -66,8 +74,10 @@ struct ShaderProgramMetal {
-     bool usedTextures[SHADER_MAX_TEXTURES];
-     bool markedForDeletion = false;
- 
--    // hashed by msaa_level
--    MTL::RenderPipelineState* pipeline_state_variants[9];
-+    // hashed by msaa_level; created on first use for that level
-+    MTL::RenderPipelineState* pipeline_state_variants[9] = {};
-+    // Retained so other MSAA levels can be created lazily instead of all up front.
-+    MTL::RenderPipelineDescriptor* pipeline_descriptor = nullptr;
- };
- 
- struct TextureDataMetal {
-@@ -128,13 +138,19 @@ struct CoordUniforms {
+@@ -128,7 +129,7 @@ struct CoordUniforms {
  
  class GfxRenderingAPIMetal final : public GfxRenderingAPI {
    public:
@@ -703,37 +676,7 @@ index 1d452102..ae772e1c 100644
      const char* GetName() override;
      int GetMaxTextureSize() override;
      GfxClipParameters GetClipParameters() override;
-     void UnloadShader(ShaderProgram* oldPrg) override;
-     void LoadShader(ShaderProgram* newPrg) override;
-     ShaderProgram* CreateAndLoadNewShader(uint64_t shaderId0, uint64_t shaderId1) override;
-+    // Compiles a shader program (MSL library, pipeline descriptor and the 1x pipeline). Thread-safe.
-+    bool BuildShaderProgram(uint64_t shaderId0, uint64_t shaderId1, bool threePointFiltering,
-+                            ShaderProgramMetal& out);
-+    MTL::RenderPipelineState* GetPipelineState(ShaderProgramMetal* prg, uint32_t msaaLevel);
-+    void StartShaderPrewarm();
-+    void RecordShaderForPrewarm(uint64_t shaderId0, uint64_t shaderId1);
-     ShaderProgram* LookupShader(uint64_t shaderId0, uint64_t shaderId1) override;
-     void ShaderGetInfo(ShaderProgram* prg, uint8_t* numInputs, bool usedTextures[2]) override;
-     void ClearShaderCache() override;
-@@ -194,12 +210,26 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
-     std::unordered_map<std::pair<uint64_t, uint32_t>, struct ShaderProgramMetal, hash_pair_shader_ids>
-         mShaderProgramPool;
- 
-+    // Shader prewarm: Fast3D compiles a Metal shader the first time each combiner is drawn, which
-+    // stutters the first time an area is seen. Shader ids are recorded to the app folder and compiled
-+    // on a background thread at the next launch; finished programs are adopted on the render thread.
-+    std::mutex mPrewarmMutex;
-+    // gfx_metal_build_shader keeps static state; serialize the (cheap) source generation step.
-+    std::mutex mShaderSourceMutex;
-+    std::vector<std::pair<ShaderProgramMetal, bool>> mPrewarmReady; // program, built for three-point filtering
-+    std::thread mPrewarmThread;
-+    std::atomic_bool mPrewarmStop{ false };
-+    std::set<std::pair<uint64_t, uint64_t>> mRecordedShaderIds;
-+    std::string mShaderListPath;
-+
-     std::vector<struct TextureDataMetal> mTextures;
-     std::vector<FramebufferMetal> mFramebuffers;
-     FrameUniforms mFrameUniforms;
+@@ -200,6 +201,8 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
      CoordUniforms mCoordUniforms;
      DrawUniforms mDrawUniforms;
      MTL::Buffer* mFrameUniformBuffer;
@@ -1015,6 +958,40 @@ index 00000000..22b71c35
 +};
 +
 +} // namespace Ship
+diff --git a/include/ship/window/gui/IOSTouchScroll.h b/include/ship/window/gui/IOSTouchScroll.h
+new file mode 100644
+index 00000000..282cf7fb
+--- /dev/null
++++ b/include/ship/window/gui/IOSTouchScroll.h
+@@ -0,0 +1,28 @@
++#pragma once
++
++#ifdef __IOS__
++#include <SDL2/SDL.h>
++
++namespace Ship::IOSTouchScroll {
++
++/**
++ * @brief Filters touch-generated mouse events before they reach ImGui.
++ *
++ * A touch press is held back until its intent is clear: a mostly vertical drag (or a horizontal drag
++ * over a window that scrolls sideways) scrolls and is never delivered, so it cannot press a button or
++ * move a slider; any other drag, or a tap, is delivered from the original press point.
++ *
++ * @param event   The SDL event about to be passed to ImGui.
++ * @param forward Function that hands an event to ImGui (ImGui_ImplSDL2_ProcessEvent).
++ * @return true if the event was consumed or already forwarded, false if the caller should forward it.
++ */
++bool FilterEvent(const SDL_Event* event, bool (*forward)(const SDL_Event*));
++
++/** @brief Applies scrolling and touch-friendly style; call right after ImGui::NewFrame(). */
++void UpdateFrame();
++
++/** @brief Enlarges scrollbars, grabs and touch padding; call before ImGui::NewFrame(). */
++void ApplyStyle();
++
++} // namespace Ship::IOSTouchScroll
++#endif
 diff --git a/src/fast/CMakeLists.txt b/src/fast/CMakeLists.txt
 index 66bf70d0..311089f1 100644
 --- a/src/fast/CMakeLists.txt
@@ -1028,7 +1005,7 @@ index 66bf70d0..311089f1 100644
 +    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_display.mm)
 +endif()
 diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
-index 237a502a..1094a280 100644
+index 237a502a..30cf577c 100644
 --- a/src/fast/Fast3dGui.cpp
 +++ b/src/fast/Fast3dGui.cpp
 @@ -12,6 +12,7 @@
@@ -1039,7 +1016,32 @@ index 237a502a..1094a280 100644
  #include <SDL_video.h>
  #include <imgui_impl_metal.h>
  #include <imgui_impl_sdl2.h>
-@@ -195,6 +196,45 @@ void Fast3dGui::ImGuiBackendShutdown() {
+@@ -22,6 +23,9 @@
+ 
+ #if defined(__ANDROID__) || defined(__IOS__)
+ #include "ship/port/mobile/MobileImpl.h"
++#ifdef __IOS__
++#include "ship/window/gui/IOSTouchScroll.h"
++#endif
+ #endif
+ 
+ #ifdef ENABLE_OPENGL
+@@ -69,7 +73,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
+     switch (mImpl.Backend) {
+         case WindowBackend::FAST3D_SDL_OPENGL:
+         case WindowBackend::FAST3D_SDL_METAL:
++#ifdef __IOS__
++            if (!Ship::IOSTouchScroll::FilterEvent(static_cast<const SDL_Event*>(event.Sdl.Event),
++                                                   &ImGui_ImplSDL2_ProcessEvent)) {
++                ImGui_ImplSDL2_ProcessEvent(static_cast<const SDL_Event*>(event.Sdl.Event));
++            }
++#else
+             ImGui_ImplSDL2_ProcessEvent(static_cast<const SDL_Event*>(event.Sdl.Event));
++#endif
+ #if defined(__ANDROID__) || defined(__IOS__)
+             Ship::Mobile::ImGuiProcessEvent(ImGui::GetIO().WantTextInput);
+ #endif
+@@ -195,6 +206,45 @@ void Fast3dGui::ImGuiBackendShutdown() {
      }
  }
  
@@ -1085,7 +1087,7 @@ index 237a502a..1094a280 100644
  void Fast3dGui::ImGuiBackendNewFrame() {
      switch (mImpl.Backend) {
  #ifdef ENABLE_OPENGL
-@@ -211,6 +251,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
+@@ -211,6 +261,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
  
  #ifdef __APPLE__
          case WindowBackend::FAST3D_SDL_METAL: {
@@ -1095,7 +1097,7 @@ index 237a502a..1094a280 100644
              GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
              api->NewFrame();
              break;
-@@ -226,6 +269,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
+@@ -226,6 +279,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
              ImGui_ImplSDL2_NewFrame();
@@ -1109,7 +1111,7 @@ index 237a502a..1094a280 100644
              break;
  #ifdef ENABLE_DX11
          case WindowBackend::FAST3D_DXGI_DX11:
-@@ -320,8 +370,20 @@ void Fast3dGui::CalculateGameViewport() {
+@@ -320,8 +380,20 @@ void Fast3dGui::CalculateGameViewport() {
      mainPos.y -= mTemporaryWindowPos.y;
      ImVec2 size = ImGui::GetContentRegionAvail();
      const auto interpreter = mInterpreter.lock().get();
@@ -1207,27 +1209,14 @@ index 00000000..66b564ee
 +}
 +#endif
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
-index 00eaedbc..c3da508a 100644
+index 00eaedbc..97cbb8ea 100644
 --- a/src/fast/backends/gfx_metal.cpp
 +++ b/src/fast/backends/gfx_metal.cpp
-@@ -13,6 +13,8 @@
- #include <algorithm>
- #include <unordered_map>
- #include <queue>
-+#include <tuple>
-+#include <cstdio>
- #include <time.h>
- #include <math.h>
- #include <cmath>
-@@ -45,6 +47,22 @@
+@@ -45,6 +45,18 @@
  // MARK: - Helpers
  namespace Fast {
  
 +GfxRenderingAPIMetal::~GfxRenderingAPIMetal() {
-+    mPrewarmStop = true;
-+    if (mPrewarmThread.joinable()) {
-+        mPrewarmThread.join();
-+    }
 +    for (auto& depthTestStates : mDepthStencilStates) {
 +        for (auto& depthMaskStates : depthTestStates) {
 +            for (MTL::DepthStencilState* state : depthMaskStates) {
@@ -1242,229 +1231,7 @@ index 00eaedbc..c3da508a 100644
  static MTL::SamplerAddressMode gfx_cm_to_metal(uint32_t val) {
      switch (val) {
          case G_TX_NOMIRROR | G_TX_CLAMP:
-@@ -195,6 +213,8 @@ void GfxRenderingAPIMetal::Init() {
- 
-     library->release();
-     autorelease_pool->release();
-+
-+    StartShaderPrewarm();
- }
- 
- struct GfxClipParameters GfxRenderingAPIMetal::GetClipParameters() {
-@@ -214,7 +234,8 @@ void GfxRenderingAPIMetal::ClearShaderCache() {
-     }
- }
- 
--struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shader_id0, uint64_t shader_id1) {
-+bool GfxRenderingAPIMetal::BuildShaderProgram(uint64_t shader_id0, uint64_t shader_id1, bool threePointFiltering,
-+                                              ShaderProgramMetal& prg) {
-     CCFeatures cc_features;
-     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
- 
-@@ -222,16 +243,25 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
-     std::string buf;
-     NS::AutoreleasePool* autorelease_pool = NS::AutoreleasePool::alloc()->init();
- 
--    MTL::VertexDescriptor* vertex_descriptor =
--        gfx_metal_build_shader(buf, numFloats, cc_features, mCurrentFilterMode == FILTER_THREE_POINT);
-+    MTL::VertexDescriptor* vertex_descriptor = nullptr;
-+    {
-+        std::lock_guard<std::mutex> lock(mShaderSourceMutex);
-+        vertex_descriptor = gfx_metal_build_shader(buf, numFloats, cc_features, threePointFiltering);
-+        vertex_descriptor->retain();
-+    }
- 
-     NS::Error* error = nullptr;
-     MTL::Library* library =
-         mDevice->newLibrary(NS::String::string(buf.data(), NS::UTF8StringEncoding), nullptr, &error);
- 
--    if (error != nullptr)
-+    if (library == nullptr || error != nullptr) {
-         SPDLOG_ERROR("Failed to compile shader library, error {}",
--                     error->localizedDescription()->cString(NS::UTF8StringEncoding));
-+                     error != nullptr ? error->localizedDescription()->cString(NS::UTF8StringEncoding) : "unknown");
-+        if (library == nullptr) {
-+            autorelease_pool->release();
-+            return false;
-+        }
-+    }
- 
-     MTL::RenderPipelineDescriptor* pipeline_descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
-     MTL::Function* vertexFunc = library->newFunction(NS::String::string("vertexShader", NS::UTF8StringEncoding));
-@@ -240,6 +270,7 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
-     pipeline_descriptor->setVertexFunction(vertexFunc);
-     pipeline_descriptor->setFragmentFunction(fragmentFunc);
-     pipeline_descriptor->setVertexDescriptor(vertex_descriptor);
-+    vertex_descriptor->release();
- 
-     pipeline_descriptor->colorAttachments()->object(0)->setPixelFormat(mSrgbMode ? MTL::PixelFormatBGRA8Unorm_sRGB
-                                                                                  : MTL::PixelFormatBGRA8Unorm);
-@@ -259,50 +290,132 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
-         pipeline_descriptor->colorAttachments()->object(0)->setWriteMask(MTL::ColorWriteMaskAll);
-     }
- 
--    struct ShaderProgramMetal* prg = &mShaderProgramPool[std::make_pair(shader_id0, shader_id1)];
--    prg->shader_id0 = shader_id0;
--    prg->shader_id1 = shader_id1;
--    prg->usedTextures[0] = cc_features.usedTextures[0];
--    prg->usedTextures[1] = cc_features.usedTextures[1];
--    prg->usedTextures[2] = cc_features.used_masks[0];
--    prg->usedTextures[3] = cc_features.used_masks[1];
--    prg->usedTextures[4] = cc_features.used_blend[0];
--    prg->usedTextures[5] = cc_features.used_blend[1];
--    prg->numInputs = cc_features.numInputs;
--    prg->numFloats = numFloats;
--
--    // Prepoluate pipeline state cache with program and available msaa levels
--    for (int i = 0; i < ARRAY_COUNT(mMsaaNumQualityLevels); i++) {
--        if (mMsaaNumQualityLevels[i] == 1) {
--            int msaa_level = i + 1;
--            pipeline_descriptor->setSampleCount(msaa_level);
--            MTL::RenderPipelineState* pipeline_state = mDevice->newRenderPipelineState(pipeline_descriptor, &error);
--
--            if (!pipeline_state || error != nullptr) {
--                // Pipeline State creation could fail if we haven't properly set up our pipeline descriptor.
--                // If the Metal API validation is enabled, we can find out more information about what
--                // went wrong.  (Metal API validation is enabled by default when a debug build is run
--                // from Xcode)
--                SPDLOG_ERROR("Failed to create pipeline state, error {}",
--                             error->localizedDescription()->cString(NS::UTF8StringEncoding));
--            }
--
--            prg->pipeline_state_variants[msaa_level] = pipeline_state;
--        }
-+    prg.shader_id0 = shader_id0;
-+    prg.shader_id1 = shader_id1;
-+    prg.usedTextures[0] = cc_features.usedTextures[0];
-+    prg.usedTextures[1] = cc_features.usedTextures[1];
-+    prg.usedTextures[2] = cc_features.used_masks[0];
-+    prg.usedTextures[3] = cc_features.used_masks[1];
-+    prg.usedTextures[4] = cc_features.used_blend[0];
-+    prg.usedTextures[5] = cc_features.used_blend[1];
-+    prg.numInputs = cc_features.numInputs;
-+    prg.numFloats = numFloats;
-+    prg.pipeline_descriptor = pipeline_descriptor;
-+    for (auto& variant : prg.pipeline_state_variants) {
-+        variant = nullptr;
-     }
- 
--    LoadShader((struct ShaderProgram*)prg);
-+    // Only the 1x pipeline is built here; other MSAA levels are built when first drawn with.
-+    // Building every supported level up front multiplied the first-use stutter.
-+    GetPipelineState(&prg, 1);
- 
-     vertexFunc->release();
-     fragmentFunc->release();
-     library->release();
--    pipeline_descriptor->release();
-     autorelease_pool->release();
-+    return true;
-+}
-+
-+MTL::RenderPipelineState* GfxRenderingAPIMetal::GetPipelineState(ShaderProgramMetal* prg, uint32_t msaaLevel) {
-+    if (msaaLevel == 0 || msaaLevel >= (uint32_t)ARRAY_COUNT(prg->pipeline_state_variants)) {
-+        msaaLevel = 1;
-+    }
-+    if (prg->pipeline_state_variants[msaaLevel] != nullptr || prg->pipeline_descriptor == nullptr) {
-+        return prg->pipeline_state_variants[msaaLevel];
-+    }
-+    NS::Error* error = nullptr;
-+    prg->pipeline_descriptor->setSampleCount(msaaLevel);
-+    MTL::RenderPipelineState* pipeline_state = mDevice->newRenderPipelineState(prg->pipeline_descriptor, &error);
-+    if (!pipeline_state || error != nullptr) {
-+        SPDLOG_ERROR("Failed to create pipeline state, error {}",
-+                     error != nullptr ? error->localizedDescription()->cString(NS::UTF8StringEncoding) : "unknown");
-+    }
-+    prg->pipeline_state_variants[msaaLevel] = pipeline_state;
-+    return pipeline_state;
-+}
-+
-+void GfxRenderingAPIMetal::RecordShaderForPrewarm(uint64_t shader_id0, uint64_t shader_id1) {
-+#ifdef __IOS__
-+    if (mShaderListPath.empty() || !mRecordedShaderIds.insert({ shader_id0, shader_id1 }).second) {
-+        return;
-+    }
-+    if (FILE* file = fopen(mShaderListPath.c_str(), "a")) {
-+        fprintf(file, "%llu %llu %d\n", (unsigned long long)shader_id0, (unsigned long long)shader_id1,
-+                mCurrentFilterMode == FILTER_THREE_POINT ? 1 : 0);
-+        fclose(file);
-+    }
-+#endif
-+}
-+
-+void GfxRenderingAPIMetal::StartShaderPrewarm() {
-+#ifdef __IOS__
-+    mShaderListPath = Ship::Context::GetPathRelativeToAppDirectory("metal-shaders.txt");
-+    std::vector<std::tuple<uint64_t, uint64_t, bool>> pending;
-+    if (FILE* file = fopen(mShaderListPath.c_str(), "r")) {
-+        unsigned long long id0 = 0, id1 = 0;
-+        int threePoint = 0;
-+        while (fscanf(file, "%llu %llu %d", &id0, &id1, &threePoint) == 3) {
-+            if (mRecordedShaderIds.insert({ id0, id1 }).second) {
-+                pending.emplace_back(id0, id1, threePoint != 0);
-+            }
-+        }
-+        fclose(file);
-+    }
-+    if (pending.empty()) {
-+        return;
-+    }
-+    SPDLOG_INFO("Prewarming {} Metal shaders", pending.size());
-+    mPrewarmThread = std::thread([this, pending = std::move(pending)]() {
-+        for (const auto& [id0, id1, threePoint] : pending) {
-+            if (mPrewarmStop.load()) {
-+                return;
-+            }
-+            ShaderProgramMetal prg;
-+            if (BuildShaderProgram(id0, id1, threePoint, prg)) {
-+                std::lock_guard<std::mutex> lock(mPrewarmMutex);
-+                mPrewarmReady.emplace_back(prg, threePoint);
-+            }
-+        }
-+    });
-+#endif
-+}
- 
-+struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shader_id0, uint64_t shader_id1) {
-+    struct ShaderProgramMetal* prg = &mShaderProgramPool[std::make_pair(shader_id0, shader_id1)];
-+    if (!BuildShaderProgram(shader_id0, shader_id1, mCurrentFilterMode == FILTER_THREE_POINT, *prg)) {
-+        prg->shader_id0 = shader_id0;
-+        prg->shader_id1 = shader_id1;
-+    }
-+    RecordShaderForPrewarm(shader_id0, shader_id1);
-+    LoadShader((struct ShaderProgram*)prg);
-     return (struct ShaderProgram*)prg;
- }
- 
- struct ShaderProgram* GfxRenderingAPIMetal::LookupShader(uint64_t shader_id0, uint64_t shader_id1) {
-+#ifdef __IOS__
-+    // Adopt programs the prewarm thread has finished, without ever waiting on it.
-+    std::unique_lock<std::mutex> prewarmLock(mPrewarmMutex, std::try_to_lock);
-+    if (prewarmLock.owns_lock() && !mPrewarmReady.empty()) {
-+        for (auto& [ready, threePoint] : mPrewarmReady) {
-+            auto key = std::make_pair(ready.shader_id0, (uint32_t)ready.shader_id1);
-+            if (threePoint == (mCurrentFilterMode == FILTER_THREE_POINT) &&
-+                mShaderProgramPool.find(key) == mShaderProgramPool.end()) {
-+                mShaderProgramPool.emplace(key, ready);
-+            } else {
-+                for (auto* variant : ready.pipeline_state_variants) {
-+                    if (variant != nullptr) {
-+                        variant->release();
-+                    }
-+                }
-+                ready.pipeline_descriptor->release();
-+            }
-+        }
-+        mPrewarmReady.clear();
-+    }
-+    if (prewarmLock.owns_lock()) {
-+        prewarmLock.unlock();
-+    }
-+#endif
-     auto it = mShaderProgramPool.find(std::make_pair(shader_id0, shader_id1));
- 
-     if (it == mShaderProgramPool.end()) {
-@@ -454,20 +567,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
+@@ -454,20 +466,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
      auto& current_framebuffer = mFramebuffers[mCurrentFramebuffer];
  
      if (current_framebuffer.mLastDepthTest != mCurrentDepthTest ||
@@ -1498,29 +1265,11 @@ index 00eaedbc..c3da508a 100644
      }
  
      if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
-@@ -541,8 +657,7 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
-     if (current_framebuffer.mLastShaderProgram != mShaderProgram) {
-         current_framebuffer.mLastShaderProgram = mShaderProgram;
- 
--        MTL::RenderPipelineState* pipeline_state =
--            mShaderProgram->pipeline_state_variants[current_framebuffer.mMsaaLevel];
-+        MTL::RenderPipelineState* pipeline_state = GetPipelineState(mShaderProgram, current_framebuffer.mMsaaLevel);
-         current_framebuffer.mCommandEncoder->setRenderPipelineState(pipeline_state);
-     }
- 
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index 15c5415f..bd2be1b4 100644
+index 15c5415f..b7682314 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
-@@ -1,6 +1,7 @@
- #if defined(ENABLE_OPENGL) || defined(__APPLE__)
- 
- #include <stdio.h>
-+#include <algorithm>
- 
- #include "fast/Fast3dWindow.h"
- 
-@@ -11,6 +12,11 @@
+@@ -11,6 +11,11 @@
  #endif
  
  #include "ship/Context.h"
@@ -1532,7 +1281,7 @@ index 15c5415f..bd2be1b4 100644
  #include "ship/config/ConsoleVariable.h"
  #include "ship/controller/controldeck/ControlDeck.h"
  #include "ship/window/FileDropMgr.h"
-@@ -53,6 +59,25 @@ LONG_PTR SDL_WndProc;
+@@ -53,6 +58,25 @@ LONG_PTR SDL_WndProc;
  #endif
  
  namespace Fast {
@@ -1558,7 +1307,7 @@ index 15c5415f..bd2be1b4 100644
  const SDL_Scancode lus_to_sdl_table[] = {
      SDL_SCANCODE_UNKNOWN,
      SDL_SCANCODE_ESCAPE,
-@@ -215,6 +240,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
+@@ -215,6 +239,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
  }
  
  void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
@@ -1575,7 +1324,7 @@ index 15c5415f..bd2be1b4 100644
      if (mFullScreen == on) {
          return;
      }
-@@ -235,7 +270,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -235,7 +269,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
          }
      }
  
@@ -1584,7 +1333,7 @@ index 15c5415f..bd2be1b4 100644
      // Implement fullscreening with native macOS APIs
      if (on != isNativeMacOSFullscreenActive(mWnd)) {
          toggleNativeMacOSFullscreen(mWnd);
-@@ -273,7 +308,22 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -273,7 +307,16 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
      }
  }
  
@@ -1595,19 +1344,13 @@ index 15c5415f..bd2be1b4 100644
  void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
 +#ifdef __IOS__
 +    // SDL reports UIScreen.maximumFramesPerSecond, which is not always what Core Animation delivers.
-+    uint32_t rate = static_cast<uint32_t>(LUS_IOSEffectiveMaxRefreshRate());
-+    // At native resolution an iPhone GPU cannot hold 120 FPS (about 80 on an A18 Pro), and pacing the
-+    // game for a rate it cannot reach slows the game and desyncs audio. Cap it to an even 60 there.
-+    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0)) {
-+        rate = std::min<uint32_t>(rate, 60);
-+    }
-+    *refresh_rate = rate;
++    *refresh_rate = static_cast<uint32_t>(LUS_IOSEffectiveMaxRefreshRate());
 +    return;
 +#endif
      int display_in_use = SDL_GetWindowDisplayIndex(mWnd);
  
      SDL_DisplayMode mode;
-@@ -374,7 +424,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -374,7 +417,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
  
  #ifdef __IOS__
@@ -1619,7 +1362,7 @@ index 15c5415f..bd2be1b4 100644
  #else
      Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
  #endif
-@@ -434,6 +487,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -434,6 +480,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
@@ -1633,7 +1376,7 @@ index 15c5415f..bd2be1b4 100644
          window_impl.Metal = { mWnd, mRenderer };
          window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
      }
-@@ -626,9 +686,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -626,9 +679,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
              OnKeyup(event.key.keysym.scancode);
              break;
          case SDL_MOUSEBUTTONDOWN:
@@ -1653,7 +1396,7 @@ index 15c5415f..bd2be1b4 100644
              OnMouseButtonUp(event.button.button - 1);
              break;
          case SDL_MOUSEWHEEL:
-@@ -657,6 +727,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -657,6 +720,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
          case SDL_DROPFILE:
              Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
              break;
@@ -1690,7 +1433,7 @@ index 15c5415f..bd2be1b4 100644
          case SDL_QUIT:
              Close();
              break;
-@@ -669,12 +769,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -669,12 +762,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
      while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {
          HandleSingleEvent(event);
      }
@@ -1705,7 +1448,7 @@ index 15c5415f..bd2be1b4 100644
      auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
      if (mFullScreen != nextFullscreenState) {
          mFullScreen = nextFullscreenState;
-@@ -686,7 +786,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -686,7 +779,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
  }
  
  bool GfxWindowBackendSDL2::IsFrameReady() {
@@ -1717,7 +1460,7 @@ index 15c5415f..bd2be1b4 100644
  }
  
  static uint64_t qpc_to_100ns(uint64_t qpc) {
-@@ -774,7 +878,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
+@@ -774,7 +871,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
  }
  
  bool GfxWindowBackendSDL2::CanDisableVsync() {
@@ -2408,25 +2151,23 @@ index eaea3cd7..5bc888a9 100644
              const float textWidth = GetStringWidth(overlay.Value.c_str());
              const float textOffset = 40.0f;
 diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
-index 1f9279bd..aa5018c1 100644
+index 1f9279bd..43defe56 100644
 --- a/src/ship/window/gui/Gui.cpp
 +++ b/src/ship/window/gui/Gui.cpp
-@@ -7,6 +7,14 @@
+@@ -7,6 +7,12 @@
  #include <string>
  #include <vector>
  
 +#ifdef __IOS__
 +#include <SDL2/SDL.h>
-+#include <imgui_internal.h>
-+#include <algorithm>
-+#include <cmath>
++#include "ship/window/gui/IOSTouchScroll.h"
 +extern "C" void ShipIOS_SetTouchControlsMenuVisible(int visible);
 +#endif
 +
  #include "ship/config/Config.h"
  #include "ship/Context.h"
  #include "ship/config/ConsoleVariable.h"
-@@ -79,9 +87,19 @@ void Gui::Init() {
+@@ -79,9 +85,19 @@ void Gui::Init() {
                                                            &iconsConfig, sIconsRanges);
  
  #if defined(__ANDROID__)
@@ -2447,7 +2188,7 @@ index 1f9279bd..aa5018c1 100644
  #endif
  
      mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
-@@ -262,6 +280,10 @@ void Gui::DrawMenu() {
+@@ -262,6 +278,10 @@ void Gui::DrawMenu() {
          GetMenu()->Draw();
      }
  
@@ -2458,44 +2199,184 @@ index 1f9279bd..aa5018c1 100644
      for (auto& windowIter : mGuiWindows) {
          windowIter.second->Update();
          windowIter.second->Draw();
-@@ -284,11 +306,113 @@ void Gui::HandleMouseCapture() {
-     }
+@@ -288,7 +308,13 @@ void Gui::StartFrame() {
+     HandleMouseCapture();
+     ImGuiBackendNewFrame();
+     ImGuiWMNewFrame();
++#ifdef __IOS__
++    IOSTouchScroll::ApplyStyle();
++#endif
+     ImGui::NewFrame();
++#ifdef __IOS__
++    IOSTouchScroll::UpdateFrame();
++#endif
  }
  
+ void Gui::EndFrame() {
+diff --git a/src/ship/window/gui/IOSTouchScroll.cpp b/src/ship/window/gui/IOSTouchScroll.cpp
+new file mode 100644
+index 00000000..517613a9
+--- /dev/null
++++ b/src/ship/window/gui/IOSTouchScroll.cpp
+@@ -0,0 +1,199 @@
 +#ifdef __IOS__
-+// Touch-friendly menus: ImGui only scrolls with a wheel or the scrollbar, which is hard to hit on
-+// a phone. A mostly vertical finger drag that starts inside a scrollable window scrolls it (with a
-+// little inertia after release) and cancels the press, so it never activates the widget it began on.
-+// Horizontal drags are left alone so sliders keep working.
-+static void IOSApplyTouchStyle() {
-+    ImGuiStyle& style = ImGui::GetStyle();
-+    style.TouchExtraPadding = ImVec2(4.0f, 4.0f);
-+    style.ScrollbarSize = std::max(style.ScrollbarSize, 18.0f);
-+    style.GrabMinSize = std::max(style.GrabMinSize, 18.0f);
++#include "ship/window/gui/IOSTouchScroll.h"
++
++#include <imgui.h>
++#include <imgui_internal.h>
++
++#include <algorithm>
++#include <cmath>
++
++namespace Ship::IOSTouchScroll {
++
++namespace {
++enum class State { Idle, Pending, Scrolling, Delivered };
++
++constexpr float kStartThreshold = 10.0f; // points of travel before a touch counts as a drag
++constexpr float kMinGlideSpeed = 30.0f;  // points per second
++constexpr Uint32 kHoldDelayMs = 150;     // a still finger is handed to the widget after this (like UIScrollView)
++
++State sState = State::Idle;
++SDL_Event sPress = {};
++float sStartX = 0.0f;
++float sStartY = 0.0f;
++int sAxis = -1;                                   // 0 horizontal, 1 vertical
++float sPendingDelta[2] = { 0.0f, 0.0f };          // scroll accumulated by events, applied next frame
++ImGuiWindow* sTarget[2] = { nullptr, nullptr };   // scrollable windows under the press, per axis
++bool sTargetsKnown = false;
++bool sGliding = false;
++float sVelocity = 0.0f;
++bool (*sForward)(const SDL_Event*) = nullptr;
++
++ImGuiWindow* FindScrollable(ImGuiWindow* window, int axis) {
++    for (; window != nullptr; window = window->ParentWindow) {
++        if (window->ScrollMax[axis] > 0.0f && !(window->Flags & ImGuiWindowFlags_NoScrollWithMouse)) {
++            return window;
++        }
++    }
++    return nullptr;
 +}
 +
-+static void IOSTouchScroll() {
-+    ImGuiContext& g = *GImGui;
-+    ImGuiIO& io = g.IO;
-+    static ImGuiWindow* sTargetY = nullptr;
-+    static ImGuiWindow* sTargetX = nullptr;
-+    static ImVec2 sStart;
-+    static int sAxis = -1; // -1 undecided, 0 horizontal, 1 vertical
-+    static ImVec2 sVelocity;
-+    constexpr float kStartThreshold = 10.0f;
++// NewFrame() clears Active until each window's Begin() runs again; WasActive is last frame's state.
++bool WindowAlive(ImGuiWindow* window) {
++    ImGuiContext* g = ImGui::GetCurrentContext();
++    return window != nullptr && g != nullptr && g->Windows.contains(window) && window->WasActive;
++}
 +
-+    auto findScrollable = [](ImGuiWindow* window, int axis) -> ImGuiWindow* {
-+        for (; window != nullptr; window = window->ParentWindow) {
-+            if (window->ScrollMax[axis] > 0.0f && !(window->Flags & ImGuiWindowFlags_NoScrollWithMouse)) {
-+                return window;
++void DeliverPress(bool (*forward)(const SDL_Event*)) {
++    SDL_Event motion = {};
++    motion.type = SDL_MOUSEMOTION;
++    motion.motion.timestamp = sPress.button.timestamp;
++    motion.motion.windowID = sPress.button.windowID;
++    motion.motion.which = SDL_TOUCH_MOUSEID;
++    motion.motion.x = sPress.button.x;
++    motion.motion.y = sPress.button.y;
++    forward(&motion);
++    forward(&sPress);
++}
++
++bool IsTouch(const SDL_Event* event) {
++    switch (event->type) {
++        case SDL_MOUSEBUTTONDOWN:
++        case SDL_MOUSEBUTTONUP:
++            return event->button.which == SDL_TOUCH_MOUSEID && event->button.button == SDL_BUTTON_LEFT;
++        case SDL_MOUSEMOTION:
++            return event->motion.which == SDL_TOUCH_MOUSEID;
++        default:
++            return false;
++    }
++}
++} // namespace
++
++bool FilterEvent(const SDL_Event* event, bool (*forward)(const SDL_Event*)) {
++    sForward = forward;
++    if (!IsTouch(event)) {
++        return false;
++    }
++
++    switch (event->type) {
++        case SDL_MOUSEBUTTONDOWN:
++            sState = State::Pending;
++            sPress = *event;
++            sStartX = (float)event->button.x;
++            sStartY = (float)event->button.y;
++            sAxis = -1;
++            sPendingDelta[0] = sPendingDelta[1] = 0.0f;
++            sTarget[0] = sTarget[1] = nullptr;
++            sTargetsKnown = false;
++            sGliding = false;
++            sVelocity = 0.0f;
++            return true;
++
++        case SDL_MOUSEMOTION:
++            if (sState == State::Pending) {
++                const float dx = (float)event->motion.x - sStartX;
++                const float dy = (float)event->motion.y - sStartY;
++                if (std::fabs(dy) > kStartThreshold && std::fabs(dy) >= std::fabs(dx)) {
++                    sState = State::Scrolling;
++                    sAxis = 1;
++                    sPendingDelta[1] += -dy;
++                } else if (std::fabs(dx) > kStartThreshold && std::fabs(dx) > std::fabs(dy)) {
++                    if (sTargetsKnown && sTarget[0] != nullptr) {
++                        sState = State::Scrolling;
++                        sAxis = 0;
++                        sPendingDelta[0] += -dx;
++                    } else {
++                        // A sideways drag over an ordinary panel belongs to the widget (e.g. a slider).
++                        DeliverPress(forward);
++                        forward(event);
++                        sState = State::Delivered;
++                    }
++                }
++                return true;
 +            }
-+        }
-+        return nullptr;
-+    };
-+    // NewFrame() resets Active until each window's Begin() runs again; WasActive is last frame's state.
-+    auto windowAlive = [&g](ImGuiWindow* window) {
-+        return window != nullptr && g.Windows.contains(window) && window->WasActive;
-+    };
++            if (sState == State::Scrolling) {
++                sPendingDelta[sAxis] += -(float)(sAxis == 1 ? event->motion.yrel : event->motion.xrel);
++                return true;
++            }
++            return false;
++
++        case SDL_MOUSEBUTTONUP:
++            if (sState == State::Pending) {
++                // A tap: deliver the held press, then the release.
++                DeliverPress(forward);
++                forward(event);
++                sState = State::Idle;
++                return true;
++            }
++            if (sState == State::Scrolling) {
++                sState = State::Idle;
++                sGliding = true;
++                return true;
++            }
++            sState = State::Idle;
++            return false;
++
++        default:
++            return false;
++    }
++}
++
++void UpdateFrame() {
++    ImGuiIO& io = ImGui::GetIO();
++
++    // A finger held still is a press on the widget, so hold-to-repeat buttons and long presses work.
++    if (sState == State::Pending && sForward != nullptr &&
++        SDL_TICKS_PASSED(SDL_GetTicks(), sPress.button.timestamp + kHoldDelayMs)) {
++        DeliverPress(sForward);
++        sState = State::Delivered;
++    }
++
++    if ((sState == State::Pending || sState == State::Scrolling) && !sTargetsKnown) {
++        ImGuiWindow* hovered = nullptr;
++        ImGuiWindow* underMoving = nullptr;
++        ImGui::FindHoveredWindowEx(ImVec2(sStartX, sStartY), false, &hovered, &underMoving);
++        sTarget[0] = FindScrollable(hovered, 0);
++        sTarget[1] = FindScrollable(hovered, 1);
++        sTargetsKnown = true;
++    }
++
 +    auto scrollBy = [](ImGuiWindow* window, int axis, float delta) {
 +        if (axis == 1) {
 +            ImGui::SetScrollY(window, window->Scroll.y + delta);
@@ -2504,71 +2385,36 @@ index 1f9279bd..aa5018c1 100644
 +        }
 +    };
 +
-+    if (io.MouseSource == ImGuiMouseSource_TouchScreen && io.MouseClicked[0]) {
-+        sTargetY = findScrollable(g.HoveredWindow, 1);
-+        sTargetX = findScrollable(g.HoveredWindow, 0);
-+        sStart = io.MousePos;
-+        sAxis = -1;
-+        sVelocity = ImVec2(0.0f, 0.0f);
-+    }
-+
-+    if (io.MouseDown[0] && io.MouseSource == ImGuiMouseSource_TouchScreen) {
-+        const float dx = io.MousePos.x - sStart.x;
-+        const float dy = io.MousePos.y - sStart.y;
-+        if (sAxis < 0) {
-+            // Vertical drags scroll; horizontal drags only scroll windows that scroll sideways (the
-+            // header bar), so sliders in ordinary panels keep receiving horizontal drags.
-+            if (std::fabs(dy) > kStartThreshold && std::fabs(dy) >= std::fabs(dx) && windowAlive(sTargetY)) {
-+                sAxis = 1;
-+            } else if (std::fabs(dx) > kStartThreshold && std::fabs(dx) > std::fabs(dy) && windowAlive(sTargetX)) {
-+                sAxis = 0;
-+            }
-+        }
-+        if (sAxis >= 0) {
-+            ImGuiWindow* target = sAxis == 1 ? sTargetY : sTargetX;
-+            if (!windowAlive(target)) {
-+                sAxis = -1;
-+                return;
-+            }
-+            const float delta = sAxis == 1 ? -io.MouseDelta.y : -io.MouseDelta.x;
-+            ImGui::ClearActiveID();
-+            scrollBy(target, sAxis, delta);
-+            if (io.DeltaTime > 0.0f) {
-+                float& velocity = sAxis == 1 ? sVelocity.y : sVelocity.x;
-+                velocity = velocity * 0.6f + (delta / io.DeltaTime) * 0.4f;
-+            }
-+        }
-+        return;
-+    }
-+
-+    // Released: keep gliding briefly, then stop.
-+    if (sAxis >= 0) {
-+        ImGuiWindow* target = sAxis == 1 ? sTargetY : sTargetX;
-+        float& velocity = sAxis == 1 ? sVelocity.y : sVelocity.x;
-+        if (windowAlive(target) && std::fabs(velocity) > 30.0f) {
-+            scrollBy(target, sAxis, velocity * io.DeltaTime);
-+            velocity *= std::pow(0.05f, io.DeltaTime);
++    if (sAxis >= 0 && (sState == State::Scrolling || sGliding)) {
++        ImGuiWindow* target = sTarget[sAxis];
++        if (!WindowAlive(target)) {
++            sGliding = false;
++            sPendingDelta[0] = sPendingDelta[1] = 0.0f;
 +            return;
 +        }
++        if (sState == State::Scrolling) {
++            const float delta = sPendingDelta[sAxis];
++            sPendingDelta[sAxis] = 0.0f;
++            scrollBy(target, sAxis, delta);
++            if (io.DeltaTime > 0.0f) {
++                sVelocity = sVelocity * 0.6f + (delta / io.DeltaTime) * 0.4f;
++            }
++        } else if (std::fabs(sVelocity) > kMinGlideSpeed) {
++            scrollBy(target, sAxis, sVelocity * io.DeltaTime);
++            sVelocity *= std::pow(0.05f, io.DeltaTime);
++        } else {
++            sGliding = false;
++            sAxis = -1;
++        }
 +    }
-+    sAxis = -1;
-+    sTargetX = nullptr;
-+    sTargetY = nullptr;
-+    sVelocity = ImVec2(0.0f, 0.0f);
 +}
-+#endif
 +
- void Gui::StartFrame() {
-     HandleMouseCapture();
-     ImGuiBackendNewFrame();
-     ImGuiWMNewFrame();
-+#ifdef __IOS__
-+    IOSApplyTouchStyle();
++void ApplyStyle() {
++    ImGuiStyle& style = ImGui::GetStyle();
++    style.TouchExtraPadding = ImVec2(4.0f, 4.0f);
++    style.ScrollbarSize = std::max(style.ScrollbarSize, 18.0f);
++    style.GrabMinSize = std::max(style.GrabMinSize, 18.0f);
++}
++
++} // namespace Ship::IOSTouchScroll
 +#endif
-     ImGui::NewFrame();
-+#ifdef __IOS__
-+    IOSTouchScroll();
-+#endif
- }
- 
- void Gui::EndFrame() {

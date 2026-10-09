@@ -991,7 +991,7 @@ index 89da6e1b7..568cff148 100644
      // Open the directory of the app.
      DIR* d = opendir(mSearchPath.c_str());
 diff --git a/soh/soh/OTRGlobals.cpp b/soh/soh/OTRGlobals.cpp
-index 1b4f62c47..da4e32d58 100644
+index 1b4f62c47..b637d78c2 100644
 --- a/soh/soh/OTRGlobals.cpp
 +++ b/soh/soh/OTRGlobals.cpp
 @@ -64,6 +64,9 @@
@@ -1160,6 +1160,21 @@ index 1b4f62c47..da4e32d58 100644
      if (imGuiScaleIndex == previousImGuiScaleIndex) {
          return;
      }
+@@ -1021,6 +1100,14 @@ bool OTRGlobals::HasOriginal() {
+ }
+ 
+ uint32_t OTRGlobals::GetInterpolationFPS() {
++#ifdef __IOS__
++    // HarkinianPad: "Lock at 60 FPS" only applies while Native Screen Resolution is on, and takes priority over the
++    // slider and Match Refresh Rate. The refresh rate still bounds it (60 Hz in Low Power Mode).
++    if (CVarGetInteger("gSettings.IOS.NativeResolution", 0) &&
++        CVarGetInteger("gSettings.IOS.NativeResolutionLock60", 0)) {
++        return std::min<uint32_t>(Ship::Context::GetRawInstance()->GetWindow()->GetCurrentRefreshRate(), 60);
++    }
++#endif
+     if (CVarGetInteger(CVAR_SETTING("MatchRefreshRate"), 0)) {
+         return Ship::Context::GetRawInstance()->GetWindow()->GetCurrentRefreshRate();
+     } else if (CVarGetInteger(CVAR_VSYNC_ENABLED, 1) ||
 diff --git a/soh/soh/SohGui/Menu.cpp b/soh/soh/SohGui/Menu.cpp
 index 642bc54a3..a591f279c 100644
 --- a/soh/soh/SohGui/Menu.cpp
@@ -1221,6 +1236,21 @@ index 642bc54a3..a591f279c 100644
      float columnWidth = (sectionWidth - style.ItemSpacing.x * columns) / columns;
      bool useColumns = columns > 1;
      if (!useColumns || (headerSearch && menuSearchText.length() > 0)) {
+diff --git a/soh/soh/SohGui/MenuTypes.h b/soh/soh/SohGui/MenuTypes.h
+index 818381e42..eb2669760 100644
+--- a/soh/soh/SohGui/MenuTypes.h
++++ b/soh/soh/SohGui/MenuTypes.h
+@@ -19,6 +19,10 @@ typedef enum {
+     DISABLE_FOR_FRAME_ADVANCE_OFF,
+     DISABLE_FOR_ADVANCED_RESOLUTION_OFF,
+     DISABLE_FOR_VERTICAL_RESOLUTION_OFF,
++#ifdef __IOS__
++    DISABLE_FOR_NATIVE_RESOLUTION_OFF,
++    DISABLE_FOR_NATIVE_RESOLUTION_LOCK_60_ON,
++#endif
+ } DisableOption;
+ 
+ struct WidgetInfo;
 diff --git a/soh/soh/SohGui/ResolutionEditor.cpp b/soh/soh/SohGui/ResolutionEditor.cpp
 index 5a9231565..e0b592555 100644
 --- a/soh/soh/SohGui/ResolutionEditor.cpp
@@ -1247,8 +1277,30 @@ index 986f93376..56e469ce0 100644
      { "coreaudio", "Core Audio" },
  #endif
      { "sdl", "SDL Audio" }
+diff --git a/soh/soh/SohGui/SohMenu.cpp b/soh/soh/SohGui/SohMenu.cpp
+index ae098993e..ff75e2582 100644
+--- a/soh/soh/SohGui/SohMenu.cpp
++++ b/soh/soh/SohGui/SohMenu.cpp
+@@ -135,6 +135,17 @@ void SohMenu::InitElement() {
+         { DISABLE_FOR_MATCH_REFRESH_RATE_ON,
+           { [](disabledInfo& info) -> bool { return CVarGetInteger(CVAR_SETTING("MatchRefreshRate"), 0); },
+             "Match Refresh Rate is Enabled" } },
++#ifdef __IOS__
++        { DISABLE_FOR_NATIVE_RESOLUTION_OFF,
++          { [](disabledInfo& info) -> bool { return !CVarGetInteger("gSettings.IOS.NativeResolution", 0); },
++            "Native Screen Resolution is Disabled" } },
++        { DISABLE_FOR_NATIVE_RESOLUTION_LOCK_60_ON,
++          { [](disabledInfo& info) -> bool {
++               return CVarGetInteger("gSettings.IOS.NativeResolution", 0) &&
++                      CVarGetInteger("gSettings.IOS.NativeResolutionLock60", 0);
++           },
++            "Locked at 60 FPS (Native Screen Resolution)" } },
++#endif
+         { DISABLE_FOR_ADVANCED_RESOLUTION_ON,
+           { [](disabledInfo& info) -> bool { return CVarGetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".Enabled", 0); },
+             "Advanced Resolution Enabled" } },
 diff --git a/soh/soh/SohGui/SohMenuSettings.cpp b/soh/soh/SohGui/SohMenuSettings.cpp
-index 476f99f3f..c198e6a8e 100644
+index 476f99f3f..3ca6c08cd 100644
 --- a/soh/soh/SohGui/SohMenuSettings.cpp
 +++ b/soh/soh/SohGui/SohMenuSettings.cpp
 @@ -9,6 +9,10 @@
@@ -1271,7 +1323,7 @@ index 476f99f3f..c198e6a8e 100644
      AddWidget(path, "Menu Controller Navigation", WIDGET_CVAR_CHECKBOX)
          .CVar(CVAR_IMGUI_CONTROLLER_NAV)
          .RaceDisable(false)
-@@ -334,10 +338,21 @@ void SohMenu::AddMenuSettings() {
+@@ -334,10 +338,36 @@ void SohMenu::AddMenuSettings() {
      path.sidebarName = "Graphics";
      AddSidebarEntry("Settings", "Graphics", 3);
      AddWidget(path, "Graphics Options", WIDGET_SEPARATOR_TEXT);
@@ -1288,12 +1340,38 @@ index 476f99f3f..c198e6a8e 100644
 +                     .DefaultValue(false)
 +                     .Tooltip("Renders at the screen's full pixel resolution instead of a third of it. Sharper, "
 +                              "but much heavier on the GPU, battery and temperature. Internal Resolution "
-+                              "multiplies on top of this."));
++                              "multiplies on top of this.\n\n"
++                              "The FPS target is not changed. If the game can't hold it at this resolution, enable "
++                              "Lock at 60 FPS below."));
++    AddWidget(path, "Lock at 60 FPS", WIDGET_CVAR_CHECKBOX)
++        .CVar("gSettings.IOS.NativeResolutionLock60")
++        .RaceDisable(false)
++        .PreFunc([](WidgetInfo& info) {
++            if (mSohMenu->disabledMap.at(DISABLE_FOR_NATIVE_RESOLUTION_OFF).active)
++                info.activeDisables.push_back(DISABLE_FOR_NATIVE_RESOLUTION_OFF);
++        })
++        .Options(CheckboxOptions()
++                     .DefaultValue(false)
++                     .Tooltip("Only applies while Native Screen Resolution is enabled. Locks interpolation at 60 FPS "
++                              "and locks the FPS slider below, which keeps its value for when the lock is off.\n\n"
++                              "Turning Native Screen Resolution off keeps this choice, and it applies again when "
++                              "Native Screen Resolution is turned back on."));
 +#endif
      AddWidget(path, "Internal Resolution", WIDGET_CVAR_SLIDER_FLOAT)
          .CVar(CVAR_INTERNAL_RESOLUTION)
          .RaceDisable(false)
-@@ -436,6 +451,89 @@ void SohMenu::AddMenuSettings() {
+@@ -395,6 +425,10 @@ void SohMenu::AddMenuSettings() {
+         .PreFunc([](WidgetInfo& info) {
+             if (mSohMenu->disabledMap.at(DISABLE_FOR_MATCH_REFRESH_RATE_ON).active)
+                 info.activeDisables.push_back(DISABLE_FOR_MATCH_REFRESH_RATE_ON);
++#ifdef __IOS__
++            if (mSohMenu->disabledMap.at(DISABLE_FOR_NATIVE_RESOLUTION_LOCK_60_ON).active)
++                info.activeDisables.push_back(DISABLE_FOR_NATIVE_RESOLUTION_LOCK_60_ON);
++#endif
+         })
+         .Options(IntSliderOptions().Tooltip(tooltip).Min(20).Max(maxFps).DefaultValue(20).Format(fpsFormat));
+     AddWidget(path, "Match Refresh Rate", WIDGET_CVAR_CHECKBOX)
+@@ -436,6 +470,89 @@ void SohMenu::AddMenuSettings() {
      path.sidebarName = "Controls";
      path.column = SECTION_COLUMN_1;
      AddSidebarEntry("Settings", "Controls", 2);
