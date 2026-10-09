@@ -24,8 +24,21 @@ as a native iOS/iPadOS app. It renders through Metal, imports a user-provided
 supported Ocarina of Time ROM through Files, and includes a landscape touch
 controller that can be hidden whenever a physical controller is connected.
 
+> [!IMPORTANT]
+> **mtbolanos fork (0.3.0).** Built from upstream **Ship of Harkinian 9.3.0
+> "Dewey"** plus this repository's patches (`patches/`) and iOS overlays
+> (`ios/`, `port/`), instead of maintained source forks. Changes from
+> HarkinianPad 0.2.1: ROM extraction runs through Torch (the 9.3.0 extractor),
+> the **Network** menu is enabled (Anchor, Sail, Crowd Control) with a static
+> SDL2_net, frame interpolation is capped to the refresh rate iOS actually
+> delivers (ProMotion unlocked via `CADisableMinimumFrameDurationOnPhone`,
+> 60 Hz in Low Power Mode), Metal depth-stencil states are cached, and
+> **Settings → Graphics → Native Screen Resolution** (off by default) renders at
+> the panel's full pixel resolution. Bundle identifier: `cl.mtbolanoss.harkinianpad`.
+
 This repository contains the mobile integration and pinned build scripts.
-The exact maintained forks and pins are in [sources.lock.json](sources.lock.json).
+The exact upstream pins are in [sources.lock.json](sources.lock.json) and
+[scripts/pins.sh](scripts/pins.sh).
 See [mod compatibility and support priorities](docs/MOD_SUPPORT.md).
 The [source-maintenance qualification](docs/MODERNIZATION.md) records the
 remaining source-delivery and reproducibility boundaries. It does **not** contain Ocarina of Time, a ROM, or a playable
@@ -260,9 +273,10 @@ flowchart LR
     G --> H["Local oot.o2r and gameplay"]
 ```
 
-The compile never reads your ROM. `scripts/build-ios.sh` fetches exact maintained
-submodule commits, verifies their contents and modes, generates
-Shipwright's ROM-free `soh.o2r`, and builds the app. Your ROM is introduced
+The compile never reads your ROM. `scripts/build-ios.sh` fetches the exact
+upstream commits, applies and verifies HarkinianPad's patches and overlays,
+generates Shipwright's ROM-free `soh.o2r` with upstream's own packer on the
+Mac, and builds the app. Your ROM is introduced
 only after installation.
 
 To create the unsigned, re-signable developer-preview package, run:
@@ -271,9 +285,9 @@ To create the unsigned, re-signable developer-preview package, run:
 scripts/package-ios.sh
 ```
 
-The current defaults in `version.json` are HarkinianPad `0.2.1`, build `8`,
-with bundle identifier `com.chrissotraidis.harkinianpad`. The package is named
-`HarkinianPad-0.2.1-preview.8-unsigned.ipa`. It contains no maintainer
+The current defaults in `version.json` are HarkinianPad `0.3.0`, build `9`,
+with bundle identifier `cl.mtbolanoss.harkinianpad`. The package is named
+`HarkinianPad-0.3.0-preview.9-unsigned.ipa`. It contains no maintainer
 certificate or provisioning profile; a sideload tool such as AltStore Classic
 must re-sign it for the installer's device.
 
@@ -362,7 +376,8 @@ binary licensing and official-store distribution. See the
 | [`scripts/build-ios.sh`](scripts/build-ios.sh) | Complete Simulator or device build |
 | [`scripts/package-ios.sh`](scripts/package-ios.sh) | Unsigned/signed IPA and game-data audit |
 | [`scripts/check-repo-safety.sh`](scripts/check-repo-safety.sh) | Fast tracked-asset, history, patch, script, and documentation gate |
-| [`patches/`](patches/) | Historical Preview 5 patch mapping; not used by normal builds |
+| [`patches/`](patches/) | Maintained Shipwright and libultraship iOS patches applied to the pinned upstream |
+| [`ios/`](ios/), [`port/`](port/) | iOS source and CMake overlays copied into the checkout |
 | [`docs/BUILDING.md`](docs/BUILDING.md) | Full build, signing, installation, and testing guide |
 | [`docs/INSTALL_IPA.md`](docs/INSTALL_IPA.md) | Developer-preview IPA installation with AltStore Classic |
 | [`docs/RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) | Source and IPA publication gates |

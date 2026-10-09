@@ -33,7 +33,7 @@ class InstallDocsTest(unittest.TestCase):
         guide = (ROOT / "docs/BUILDING.md").read_text()
         self.assertIn("Current source defaults to arm64 iOS/iPadOS 15+", readme)
         self.assertIn("`DEPLOYMENT_TARGET=15.0`", guide)
-        self.assertIn("CI explicitly selects 14.0", guide)
+        self.assertIn("same 15.0 default", guide)
         self.assertNotIn("separate compile experiment", guide)
 
     def test_identity_and_distribution(self):

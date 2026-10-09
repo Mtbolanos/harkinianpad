@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d92b7379b..fa8028a4d 100644
+index 7951c1041..23af73ec9 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1,6 +1,14 @@
@@ -18,7 +18,7 @@ index d92b7379b..fa8028a4d 100644
  set(CMAKE_CXX_STANDARD 20 CACHE STRING "The C++ standard to use")
  set(CMAKE_C_STANDARD 23 CACHE STRING "The C standard to use")
  
-@@ -182,6 +186,11 @@ set(GFX_DEBUG_DISASSEMBLER ON)
+@@ -184,6 +192,11 @@ set(GFX_DEBUG_DISASSEMBLER ON)
  set(GBI_UCODE F3DEX_GBI_2)
  list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/CMake")
  
@@ -30,121 +30,29 @@ index d92b7379b..fa8028a4d 100644
  # Enable MPQ and OTR support
  set(INCLUDE_MPQ_SUPPORT ON)
  
-@@ -205,6 +214,12 @@ add_subdirectory(libultraship ${CMAKE_BINARY_DIR}/libultraship)
- target_compile_options(libultraship PRIVATE "${WARNING_OVERRIDE}")
- target_compile_definitions(libultraship PUBLIC INCLUDE_MPQ_SUPPORT)
- add_subdirectory(ZAPDTR/ZAPD ${CMAKE_BINARY_DIR}/ZAPD)
- add_subdirectory(OTRExporter)
-+if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-+    target_link_libraries(OTRExporter PUBLIC
-+        tinyxml2::tinyxml2
-+        libzip::zip
-+    )
-+endif()
- add_subdirectory(soh)
+@@ -338,6 +351,9 @@ add_custom_target(
+ file(GLOB_RECURSE SOH_O2R_ASSETS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/soh/assets/custom/*)
+ list(FILTER SOH_O2R_ASSETS EXCLUDE REGEX "/soh/assets/custom/shaders/")
+ file(GLOB_RECURSE SOH_O2R_SHADERS CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/libultraship/src/fast/shaders/*)
++# iOS cross-builds cannot run the packer; HarkinianPad generates soh.o2r with a host tools-only
++# configure (scripts/generate-port-archive.sh) and copies it into the bundle.
++if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+ add_custom_command(
+     OUTPUT ${CMAKE_BINARY_DIR}/soh/soh.o2r
+     # copy LUS default shaders into assets/custom
+@@ -358,6 +374,7 @@ add_custom_target(GenerateSohOtr ALL DEPENDS ${CMAKE_BINARY_DIR}/soh/soh.o2r)
  
- set_property(TARGET soh PROPERTY APPIMAGE_DESKTOP_FILE_TERMINAL YES)
-diff --git a/CMake/ios.cmake b/CMake/ios.cmake
-new file mode 100644
-index 000000000..30adad262
---- /dev/null
-+++ b/CMake/ios.cmake
-@@ -0,0 +1,90 @@
-+include(FetchContent)
-+
-+# ZAPDLib runs in-process for first-launch asset extraction and requires PNG.
-+set(PNG_SHARED OFF CACHE BOOL "" FORCE)
-+set(PNG_STATIC ON CACHE BOOL "" FORCE)
-+set(PNG_FRAMEWORK OFF CACHE BOOL "" FORCE)
-+set(PNG_TESTS OFF CACHE BOOL "" FORCE)
-+set(PNG_TOOLS OFF CACHE BOOL "" FORCE)
-+FetchContent_Declare(
-+    PNG
-+    GIT_REPOSITORY https://github.com/pnggroup/libpng.git
-+    GIT_TAG v1.6.54
-+    OVERRIDE_FIND_PACKAGE
-+)
-+FetchContent_MakeAvailable(PNG)
-+
-+# libpng's build-tree target is not exported under its installed package name.
-+if(NOT TARGET PNG::PNG)
-+    add_library(PNG::PNG ALIAS png_static)
+ # ExtractAssets produced soh.o2r as well as the rom archives, so keep doing that.
+ add_dependencies(ExtractAssets GenerateSohOtr)
 +endif()
-+
-+# Keep the desktop custom-audio formats available in the iOS build.
-+set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
-+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
-+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-+set(INSTALL_DOCS OFF CACHE BOOL "" FORCE)
-+set(INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
-+set(INSTALL_CMAKE_PACKAGE_MODULE OFF CACHE BOOL "" FORCE)
-+FetchContent_Declare(
-+    Ogg
-+    GIT_REPOSITORY https://github.com/xiph/ogg.git
-+    GIT_TAG v1.3.6
-+    OVERRIDE_FIND_PACKAGE
-+)
-+FetchContent_MakeAvailable(Ogg)
-+
-+FetchContent_Declare(
-+    Vorbis
-+    GIT_REPOSITORY https://github.com/xiph/vorbis.git
-+    GIT_TAG v1.3.7
-+)
-+FetchContent_MakeAvailable(Vorbis)
-+if(NOT TARGET Vorbis::vorbis)
-+    add_library(Vorbis::vorbis ALIAS vorbis)
-+    add_library(Vorbis::vorbisenc ALIAS vorbisenc)
-+    add_library(Vorbis::vorbisfile ALIAS vorbisfile)
-+endif()
-+
-+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
-+FetchContent_Declare(
-+    Opus
-+    GIT_REPOSITORY https://github.com/xiph/opus.git
-+    GIT_TAG v1.5.2
-+)
-+FetchContent_MakeAvailable(Opus)
-+if(NOT TARGET Opus::opus)
-+    add_library(Opus::opus ALIAS opus)
-+endif()
-+
-+# Match the installed Opus header layout expected by Shipwright.
-+set(OPUS_COMPAT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/harkinianpad-include")
-+file(COPY "${opus_SOURCE_DIR}/include/"
-+    DESTINATION "${OPUS_COMPAT_INCLUDE_DIR}/opus"
-+)
-+target_include_directories(opus INTERFACE
-+    "$<BUILD_INTERFACE:${OPUS_COMPAT_INCLUDE_DIR}>"
-+)
-+
-+# opusfile 0.12 has no CMake project; build its local-file decoder directly.
-+FetchContent_Declare(
-+    OpusFile
-+    GIT_REPOSITORY https://github.com/xiph/opusfile.git
-+    GIT_TAG v0.12
-+    SOURCE_SUBDIR cmake-not-available
-+)
-+FetchContent_MakeAvailable(OpusFile)
-+add_library(opusfile STATIC
-+    ${opusfile_SOURCE_DIR}/src/info.c
-+    ${opusfile_SOURCE_DIR}/src/internal.c
-+    ${opusfile_SOURCE_DIR}/src/opusfile.c
-+    ${opusfile_SOURCE_DIR}/src/stream.c
-+)
-+target_compile_definitions(opusfile PRIVATE OP_DISABLE_HTTP)
-+target_include_directories(opusfile
-+    PUBLIC ${opusfile_SOURCE_DIR}/include
-+    PRIVATE ${opusfile_SOURCE_DIR}/src
-+)
-+target_link_libraries(opusfile PUBLIC Ogg::ogg Opus::opus)
-+add_library(OpusFile::opusfile ALIAS opusfile)
+ 
+ # The asset tools only need torch, so a tools-only configure can skip libultraship and soh
+ # entirely -- that is all CI needs to produce soh.o2r.
 diff --git a/soh/CMakeLists.txt b/soh/CMakeLists.txt
-index 615fdeafe..6e57d8c3d 100644
+index f356d2148..a2708bf86 100644
 --- a/soh/CMakeLists.txt
 +++ b/soh/CMakeLists.txt
-@@ -1,12 +1,16 @@
+@@ -1,13 +1,17 @@
  cmake_minimum_required(VERSION 3.26.0 FATAL_ERROR)
  
 -set(CMAKE_SYSTEM_VERSION 10.0 CACHE STRING "" FORCE)
@@ -156,6 +64,7 @@ index 615fdeafe..6e57d8c3d 100644
  
  project(soh LANGUAGES C CXX)
  set(CMAKE_CXX_STANDARD 20 CACHE STRING "The C++ standard to use")
+ set(CMAKE_CXX_STANDARD_REQUIRED ON)
  set(CMAKE_C_STANDARD 23 CACHE STRING "The C standard to use")
  
 -if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
@@ -163,19 +72,19 @@ index 615fdeafe..6e57d8c3d 100644
      enable_language(OBJCXX)
      set(CMAKE_OBJC_FLAGS "${CMAKE_OBJC_FLAGS} -fobjc-arc")
      set(CMAKE_OBJCXX_FLAGS "${CMAKE_OBJCXX_FLAGS} -fobjc-arc")
-@@ -137,6 +141,11 @@ file(GLOB_RECURSE soh__ RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "soh/*.c" "soh/*.cp
+@@ -135,6 +139,11 @@ file(GLOB_RECURSE soh__ CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "
  # Add specific files that don't match the pattern
  list(APPEND soh__ ${CMAKE_CURRENT_SOURCE_DIR}/soh/Enhancements/speechsynthesizer/DarwinSpeechSynthesizer.mm)
  
 +if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
-+    list(FILTER soh__ EXCLUDE REGEX "^soh/Network/")
-+    list(FILTER soh__ EXCLUDE REGEX "^soh/SohGui/SohMenuNetwork\\.cpp$")
++    list(APPEND soh__ ${CMAKE_CURRENT_SOURCE_DIR}/ios/HarkinianPadTouchControls.mm ${CMAKE_CURRENT_SOURCE_DIR}/ios/HarkinianPadModImport.mm)
++    set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/ios/HarkinianPadModImport.mm PROPERTIES COMPILE_FLAGS "-fobjc-arc")
 +endif()
 +
  # Create source groups that match the real file directory paths
  foreach(source IN LISTS soh__)
      get_filename_component(source_path "${source}" PATH)
-@@ -155,7 +164,7 @@ endif()
+@@ -153,7 +162,7 @@ endif()
  # handle speechsynthesizer removals
  if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
      list(FILTER soh__ EXCLUDE REGEX "soh/Enhancements/speechsynthesizer/Darwin")
@@ -184,16 +93,23 @@ index 615fdeafe..6e57d8c3d 100644
      list(FILTER soh__ EXCLUDE REGEX "soh/Enhancements/speechsynthesizer/SAPI")
  else()
      list(FILTER soh__ EXCLUDE REGEX "soh/Enhancements/speechsynthesizer/(Darwin|SAPI)")
-@@ -254,6 +258,16 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+@@ -252,6 +261,23 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
          XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
          OUTPUT_NAME "soh-macos"
      )
 +elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++    set(HARKINIANPAD_ASSET_CATALOG
++        "${CMAKE_CURRENT_SOURCE_DIR}/ios/Assets.xcassets")
++    target_sources(${PROJECT_NAME} PRIVATE "${HARKINIANPAD_ASSET_CATALOG}")
++    set_source_files_properties("${HARKINIANPAD_ASSET_CATALOG}" PROPERTIES
++        MACOSX_PACKAGE_LOCATION Resources
++    )
 +    set_target_properties(${PROJECT_NAME} PROPERTIES
 +        MACOSX_BUNDLE TRUE
 +        MACOSX_BUNDLE_GUI_IDENTIFIER "${BUNDLE_ID}"
 +        MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/ios/Info.plist.in"
 +        OUTPUT_NAME "HarkinianPad"
++        XCODE_ATTRIBUTE_ASSETCATALOG_COMPILER_APPICON_NAME "AppIcon"
 +        XCODE_ATTRIBUTE_CLANG_ENABLE_OBJC_ARC YES
 +        XCODE_ATTRIBUTE_PRODUCT_BUNDLE_IDENTIFIER "${BUNDLE_ID}"
 +        XCODE_ATTRIBUTE_TARGETED_DEVICE_FAMILY "1,2"
@@ -201,18 +117,36 @@ index 615fdeafe..6e57d8c3d 100644
  elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
      set_target_properties(${PROJECT_NAME} PROPERTIES
      OUTPUT_NAME "soh.elf"
-@@ -302,12 +310,14 @@ FetchContent_MakeAvailable(dr_libs)
+@@ -300,12 +326,32 @@ FetchContent_MakeAvailable(dr_libs)
  find_package(SDL2)
  set(SDL2-INCLUDE ${SDL2_INCLUDE_DIRS})
  
 -find_package(SDL2_net)
-+if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
-+    find_package(SDL2_net)
- 
+-
 -if(NOT SDL2_net_FOUND)
 -    message(STATUS "SDL2_net not found (it's possible the version installed is too old).")
--else()
++if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++    # Anchor, Sail and Crowd Control need SDL2_net, which the iOS SDK does not provide. Build it
++    # statically against libultraship's SDL2 and expose it under the <SDL2/SDL_net.h> path that
++    # soh/Network uses.
++    set(SDL2NET_INSTALL OFF CACHE BOOL "" FORCE)
++    set(SDL2NET_SAMPLES OFF CACHE BOOL "" FORCE)
++    set(_harkinianpad_shared_libs ${BUILD_SHARED_LIBS})
++    set(BUILD_SHARED_LIBS OFF)
++    FetchContent_Declare(
++        SDL2_net
++        GIT_REPOSITORY https://github.com/libsdl-org/SDL_net.git
++        GIT_TAG 904600c6133e0435d627ec1878bfdfeac414a899 # release-2.4.0
++    )
++    FetchContent_MakeAvailable(SDL2_net)
++    set(BUILD_SHARED_LIBS ${_harkinianpad_shared_libs})
++    set(SDL2_NET_COMPAT_INCLUDE_DIR "${CMAKE_BINARY_DIR}/harkinianpad-sdl2net-include")
++    file(COPY "${sdl2_net_SOURCE_DIR}/include/SDL_net.h" DESTINATION "${SDL2_NET_COMPAT_INCLUDE_DIR}/SDL2")
++    target_include_directories(SDL2_net INTERFACE "$<BUILD_INTERFACE:${SDL2_NET_COMPAT_INCLUDE_DIR}>")
+ else()
 -    set(SDL2-NET-INCLUDE ${SDL_NET_INCLUDE_DIRS})
++    find_package(SDL2_net)
++
 +    if(NOT SDL2_net_FOUND)
 +        message(STATUS "SDL2_net not found (it's possible the version installed is too old).")
 +    else()
@@ -221,7 +155,7 @@ index 615fdeafe..6e57d8c3d 100644
  endif()
  
  if (ESPEAK)
-@@ -373,6 +383,18 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
+@@ -372,6 +418,17 @@ if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
              NOMINMAX
          )
      endif()
@@ -229,7 +163,6 @@ index 615fdeafe..6e57d8c3d 100644
 +    target_compile_definitions(${PROJECT_NAME} PRIVATE
 +        "$<$<CONFIG:Debug>:_DEBUG>"
 +        "$<$<CONFIG:Release>:NDEBUG>"
-+        "SOH_DISABLE_NETWORKING;"
 +        "__IOS__;"
 +        "F3DEX_GBI_2;"
 +        "_CONSOLE;"
@@ -240,7 +173,7 @@ index 615fdeafe..6e57d8c3d 100644
  elseif (CMAKE_SYSTEM_NAME STREQUAL "CafeOS")
      target_compile_definitions(${PROJECT_NAME} PRIVATE
          "$<$<CONFIG:Debug>:"
-@@ -482,7 +503,7 @@ if(MSVC)
+@@ -482,7 +539,7 @@ if(MSVC)
  endif()
  
  if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
@@ -249,7 +182,7 @@ index 615fdeafe..6e57d8c3d 100644
          target_compile_options(${PROJECT_NAME} PRIVATE
              -Wall -Wextra -Wno-error
              -Wformat-security
-@@ -587,7 +608,9 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+@@ -591,8 +648,10 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
          target_link_options(${PROJECT_NAME} PRIVATE
              -pthread
                  #-fsanitize=address
@@ -260,10 +193,11 @@ index 615fdeafe..6e57d8c3d 100644
 +        endif()
      endif()
  endif()
-@@ -613,6 +648,31 @@ if(NOT CMAKE_SYSTEM_NAME MATCHES "NintendoSwitch|CafeOS")
-     #    COMMAND ${VS_COPY_ASSETS_CMD}
-     )
- endif()
+ ################################################################################
+@@ -611,6 +670,31 @@ add_custom_command(
+     COMMENT "Copying asset ymls..."
+     COMMAND ${CMAKE_COMMAND} -E copy_directory_if_different ${CMAKE_SOURCE_DIR}/soh/assets/yml $<TARGET_FILE_DIR:soh>/assets
+ )
 +if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
 +    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/soh.o2r")
 +        add_custom_command(
@@ -292,8 +226,8 @@ index 615fdeafe..6e57d8c3d 100644
  ################################################################################
  # Dependencies
  ################################################################################
-@@ -691,6 +751,22 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "CafeOS")
-     target_include_directories(${PROJECT_NAME} PRIVATE
+@@ -685,6 +769,23 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "CafeOS")
+     target_include_directories(${PROJECT_NAME} SYSTEM PRIVATE
          ${DEVKITPRO}/portlibs/wiiu/include/
      )
 +elseif(CMAKE_SYSTEM_NAME STREQUAL "iOS")
@@ -301,9 +235,10 @@ index 615fdeafe..6e57d8c3d 100644
 +    find_package(Threads REQUIRED)
 +    set(ADDITIONAL_LIBRARY_DEPENDENCIES
 +        "libultraship;"
-+        "ZAPDLib;"
++        "torch;"
 +        SDL2::SDL2-static
 +        SDL2::SDL2main
++        SDL2_net::SDL2_net-static
 +        Ogg::ogg
 +        Vorbis::vorbis
 +        Vorbis::vorbisenc
@@ -315,16 +250,16 @@ index 615fdeafe..6e57d8c3d 100644
  else()
      find_package(SDL2)
      set(THREADS_PREFER_PTHREAD_FLAG ON)
-@@ -715,7 +791,7 @@ else()
-     )
+@@ -744,7 +845,7 @@ if(USE_ASAN)
  endif()
+ 
  
 -if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin|NintendoSwitch|CafeOS")
 +if(NOT CMAKE_SYSTEM_NAME MATCHES "Darwin|iOS|NintendoSwitch|CafeOS")
  INSTALL(TARGETS soh DESTINATION . COMPONENT ship)
  endif()
  
-@@ -725,14 +801,38 @@ INSTALL(FILES ${CMAKE_BINARY_DIR}/soh/soh.o2r DESTINATION . COMPONENT ship)
+@@ -754,17 +855,45 @@ INSTALL(FILES ${CMAKE_BINARY_DIR}/soh/soh.o2r DESTINATION . COMPONENT ship)
  endif()
  
  find_program(CURL NAMES curl DOC "Path to the curl program.  Used to download files.")
@@ -365,8 +300,677 @@ index 615fdeafe..6e57d8c3d 100644
  INSTALL(FILES ${CMAKE_BINARY_DIR}/gamecontrollerdb.txt DESTINATION . COMPONENT ship)
  endif()
  
++if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
++    target_link_libraries(${PROJECT_NAME} PRIVATE "-framework UniformTypeIdentifiers")
++endif()
++
+ if(CMAKE_SYSTEM_NAME MATCHES "NintendoSwitch|CafeOS")
+     if (NOT TARGET pathconf)
+         add_library(pathconf OBJECT platform/pathconf.c)
+diff --git a/soh/soh/Enhancements/FileSelectEnhancements.cpp b/soh/soh/Enhancements/FileSelectEnhancements.cpp
+index 8dd94e803..a25a2cd79 100644
+--- a/soh/soh/Enhancements/FileSelectEnhancements.cpp
++++ b/soh/soh/Enhancements/FileSelectEnhancements.cpp
+@@ -46,21 +46,21 @@ std::array<std::string, LANGUAGE_MAX> RandomizerSettingsMenuText[RSM_MAX] = {
+     },
+     { // English
+       "No randomizer seed loaded.\nPlease generate one first"
+-#if defined(__WIIU__) || defined(__SWITCH__)
++#if defined(__WIIU__) || defined(__SWITCH__) || defined(__IOS__)
+       ".",
+ #else
+       ",\nor drop a spoiler log on the game window.",
+ #endif
+       // German
+       "Kein Randomizer Seed gefunden.\nBitte generiere zuerst einen"
+-#if defined(__WIIU__) || defined(__SWITCH__)
++#if defined(__WIIU__) || defined(__SWITCH__) || defined(__IOS__)
+       ".",
+ #else
+       ",\noder ziehe ein Spoiler Log\nauf das Spielfenster.",
+ #endif
+       // French
+       "Aucune Seed de Randomizer actuellement disponible.\nGénérez-en une dans les \"Randomizer Settings\""
+-#if (defined(__WIIU__) || defined(__SWITCH__))
++#if defined(__WIIU__) || defined(__SWITCH__) || defined(__IOS__)
+       "."
+ #else
+       "\nou glissez un spoilerlog sur la fenêtre du jeu."
+diff --git a/soh/soh/Enhancements/ModCatalog.h b/soh/soh/Enhancements/ModCatalog.h
+new file mode 100644
+index 000000000..52e460d16
+--- /dev/null
++++ b/soh/soh/Enhancements/ModCatalog.h
+@@ -0,0 +1,41 @@
++#pragma once
++#include <algorithm>
++#include <filesystem>
++#include <map>
++#include <string>
++#include <vector>
++
++namespace ModCatalog {
++// Relative paths distinguish packs with identical stems without storing sandbox identities.
++struct Selection {
++    std::vector<std::string> enabled;
++    std::vector<std::string> disabled;
++};
++inline Selection Reconcile(const std::map<std::string, std::filesystem::path>& files,
++                           const Selection& saved, bool legacy) {
++    Selection result;
++    auto contains = [](const auto& values, const auto& value) {
++        return std::find(values.begin(), values.end(), value) != values.end();
++    };
++    std::vector<std::string> seen;
++    for (const auto& id : saved.enabled) {
++        if (contains(seen, id)) continue;
++        seen.push_back(id);
++        for (const auto& [key, path] : files) {
++            if ((legacy ? path.stem().string() == id : key == id) &&
++                !contains(result.enabled, key)) {
++                result.enabled.push_back(key);
++                break; // An ambiguous legacy stem selects only one deterministic pack.
++            }
++        }
++    }
++    for (const auto& [key, path] : files) {
++        if (contains(result.enabled, key)) continue;
++        // Keep existing installations' first migration behavior. Subsequent new packs need opt-in.
++        bool ambiguousLegacy = legacy && contains(saved.enabled, path.stem().string());
++        if (legacy && !ambiguousLegacy) result.enabled.push_back(key);
++        else result.disabled.push_back(key);
++    }
++    return result;
++}
++}
+diff --git a/soh/soh/Enhancements/ModPackImport.cpp b/soh/soh/Enhancements/ModPackImport.cpp
+new file mode 100644
+index 000000000..e39638060
+--- /dev/null
++++ b/soh/soh/Enhancements/ModPackImport.cpp
+@@ -0,0 +1,152 @@
++#include "ModPackImport.h"
++#include <zip.h>
++#ifdef INCLUDE_MPQ_SUPPORT
++#include <StormLib.h>
++#endif
++#include <algorithm>
++#include <array>
++#include <fstream>
++#include <memory>
++#include <stdexcept>
++
++namespace ModPackImport {
++namespace fs = std::filesystem;
++namespace {
++constexpr uint64_t MaxBytes = 16ULL * 1024 * 1024 * 1024;
++constexpr uint64_t MaxResourceBytes = 256ULL * 1024 * 1024;
++constexpr uint64_t MaxEntries = 100000;
++using Zip = std::unique_ptr<zip_t, decltype(&zip_discard)>;
++std::string Extension(const fs::path& path) {
++    auto ext = path.extension().string();
++    std::transform(ext.begin(), ext.end(), ext.begin(), [](unsigned char c) { return std::tolower(c); });
++    return ext;
++}
++bool Pack(const fs::path& path) {
++    return Extension(path) == ".o2r"
++#ifdef INCLUDE_MPQ_SUPPORT
++        || Extension(path) == ".otr"
++#endif
++        ;
++}
++Zip OpenZip(const fs::path& path) {
++    Zip zip(zip_open(path.string().c_str(), ZIP_RDONLY | ZIP_CHECKCONS, nullptr), zip_discard);
++    if (!zip || zip_get_num_entries(zip.get(), 0) <= 0 ||
++        static_cast<uint64_t>(zip_get_num_entries(zip.get(), 0)) > MaxEntries)
++        throw std::runtime_error("Invalid, empty or oversized archive.");
++    return zip;
++}
++void ValidateArchive(const fs::path& path) {
++    if (fs::file_size(path) > MaxBytes) throw std::runtime_error("Pack exceeds the 16 GiB import limit.");
++    if (Extension(path) == ".o2r") {
++        auto zip = OpenZip(path);
++        uint64_t total = 0;
++        for (zip_int64_t i = 0; i < zip_get_num_entries(zip.get(), 0); ++i) {
++            zip_stat_t entry;
++            if (zip_stat_index(zip.get(), i, 0, &entry) || !entry.name || !entry.name[0] ||
++                entry.encryption_method != ZIP_EM_NONE || entry.size > MaxResourceBytes ||
++                entry.size > MaxBytes - total)
++                throw std::runtime_error("Encrypted or oversized pack content is unsupported.");
++            total += entry.size;
++        }
++    }
++#ifdef INCLUDE_MPQ_SUPPORT
++    else if (Extension(path) == ".otr") {
++        HANDLE archive = nullptr;
++        if (!SFileOpenArchive(path.string().c_str(), 0, MPQ_OPEN_READ_ONLY, &archive))
++            throw std::runtime_error("Invalid OTR archive.");
++        bool valid = false;
++        HANDLE list = nullptr;
++        // The selected runtime dereferences (listfile) when opening OTRs.
++        // Merely opening an arbitrary MPQ is not sufficient validation.
++        if (SFileOpenFileEx(archive, "(listfile)", 0, &list)) {
++            DWORD high = 0;
++            DWORD size = SFileGetFileSize(list, &high);
++            if (!high && size > 0 && size <= MaxResourceBytes) {
++                std::array<char, 64 * 1024> buffer;
++                uint64_t readTotal = 0;
++                DWORD bytes = 0;
++                while (SFileReadFile(list, buffer.data(), buffer.size(), &bytes, nullptr)) readTotal += bytes;
++                readTotal += bytes;
++                valid = readTotal == size;
++            }
++            SFileCloseFile(list);
++        }
++        SFILE_FIND_DATA entry;
++        HANDLE search = SFileFindFirstFile(archive, "*", &entry, nullptr);
++        uint64_t total = 0, entries = 0;
++        if (search) {
++            do {
++                if (++entries > MaxEntries || entry.dwFileSize > MaxResourceBytes ||
++                    entry.dwFileSize > MaxBytes - total) { valid = false; break; }
++                total += entry.dwFileSize;
++            } while (SFileFindNextFile(search, &entry));
++            SFileFindClose(search);
++        } else valid = false;
++        SFileCloseArchive(archive);
++        if (!valid) throw std::runtime_error("OTR has no readable file list or exceeds resource limits.");
++    }
++#endif
++    else throw std::runtime_error("Choose a SoH .o2r or .otr pack, or a ZIP containing packs. Extract .7z first.");
++}
++}
++void Validate(const fs::path& input) { ValidateArchive(input); }
++size_t Import(const fs::path& input, const fs::path& destination) {
++    // The caller chooses an unused destination. Exclusive creation protects existing data.
++    if (!fs::create_directory(destination)) throw std::runtime_error("Import destination already exists.");
++    try {
++        size_t count = 0;
++        if (Extension(input) == ".zip") {
++            auto zip = OpenZip(input);
++            uint64_t total = 0;
++            for (zip_int64_t i = 0; i < zip_get_num_entries(zip.get(), 0); ++i) {
++                zip_stat_t entry;
++                if (zip_stat_index(zip.get(), i, 0, &entry)) throw std::runtime_error("Unreadable ZIP entry.");
++                const fs::path relative(entry.name);
++                if (relative.empty() || relative.is_absolute() || relative.string().find('\\') != std::string::npos)
++                    throw std::runtime_error("Unsafe ZIP entry path.");
++                bool metadata = relative.filename().string().starts_with("._");
++                for (const auto& part : relative) {
++                    if (part == "..") throw std::runtime_error("Unsafe ZIP entry path.");
++                    if (part == "__MACOSX") metadata = true;
++                }
++                // Finder stores AppleDouble sidecars with the original pack extension.
++                if (metadata || !Pack(relative)) continue;
++                if (entry.encryption_method != ZIP_EM_NONE || entry.size > MaxBytes - total)
++                    throw std::runtime_error("Encrypted or oversized ZIP content is unsupported.");
++                total += entry.size;
++                const auto output = destination / relative.lexically_normal();
++                fs::create_directories(output.parent_path());
++                if (fs::exists(output)) throw std::runtime_error("ZIP contains duplicate pack paths.");
++                std::unique_ptr<zip_file_t, decltype(&zip_fclose)> file(zip_fopen_index(zip.get(), i, 0), zip_fclose);
++                if (!file) throw std::runtime_error("Cannot read packed archive.");
++                std::ofstream stream(output, std::ios::binary);
++                std::array<char, 64 * 1024> buffer;
++                uint64_t written = 0;
++                while (true) {
++                    auto bytes = zip_fread(file.get(), buffer.data(), buffer.size());
++                    if (bytes < 0) throw std::runtime_error("Corrupt ZIP content.");
++                    if (!bytes) break;
++                    written += bytes;
++                    if (written > entry.size) throw std::runtime_error("ZIP size mismatch.");
++                    stream.write(buffer.data(), bytes);
++                    if (!stream) throw std::runtime_error("Cannot save pack. Check available storage.");
++                }
++                stream.close();
++                if (!stream || written != entry.size) throw std::runtime_error("Incomplete ZIP content.");
++                Validate(output);
++                ++count;
++            }
++        } else {
++            Validate(input);
++            fs::copy_file(input, destination / input.filename());
++            ++count;
++        }
++        if (!count) throw std::runtime_error("No supported SoH packs found. Extract .7z downloads first.");
++        return count;
++    } catch (...) {
++        std::error_code ignored;
++        fs::remove_all(destination, ignored); // Only the exclusively created staging directory.
++        throw;
++    }
++}
++}
+diff --git a/soh/soh/Enhancements/ModPackImport.h b/soh/soh/Enhancements/ModPackImport.h
+new file mode 100644
+index 000000000..10f3cef81
+--- /dev/null
++++ b/soh/soh/Enhancements/ModPackImport.h
+@@ -0,0 +1,10 @@
++#pragma once
++#include <filesystem>
++#include <string>
++
++namespace ModPackImport {
++// Checks container structure and runtime-required metadata. Throws on failure.
++void Validate(const std::filesystem::path& input);
++// Copies into a new batch directory; never replaces existing packs. Throws on failure.
++size_t Import(const std::filesystem::path& input, const std::filesystem::path& destination);
++}
+diff --git a/soh/soh/Enhancements/bootcommands.c b/soh/soh/Enhancements/bootcommands.c
+index baf3dc261..dbf3a67a5 100644
+--- a/soh/soh/Enhancements/bootcommands.c
++++ b/soh/soh/Enhancements/bootcommands.c
+@@ -3,6 +3,10 @@
+ #include "bootcommands.h"
+ #include "soh/cvar_prefixes.h"
+ 
++#ifdef __IOS__
++#include "ios/HarkinianPadTouchControls.h"
++#endif
++
+ void BootCommands_Init() {
+     // Clears vars to prevent randomizer menu from being disabled
+     CVarClear(CVAR_GENERAL("NewSeedGenerated"));
+@@ -11,5 +15,23 @@ void BootCommands_Init() {
+     CVarClear(CVAR_GENERAL("BetterDebugWarpScreenMQModeScene"));
+ #if defined(__SWITCH__) || defined(__WIIU__)
+     CVarRegisterInteger(CVAR_IMGUI_CONTROLLER_NAV, 1); // always enable controller nav on switch/wii u
++#elif defined(__IOS__)
++    CVarSetInteger(CVAR_IMGUI_CONTROLLER_NAV, 1); // controller-first menus on iOS
++    CVarRegisterInteger(CVAR_SETTING("HarkinianPad.TouchControls"), 1);
++    HarkinianPad_SetTouchControlsEnabled(
++        CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchControls"), 1));
++    CVarRegisterInteger(CVAR_SETTING("HarkinianPad.TouchControlTransparency"), 0);
++    CVarRegisterFloat(CVAR_SETTING("HarkinianPad.TouchControlOpacity"), 0.5f);
++    HarkinianPad_SetTouchControlsOpacity(
++        CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchControlTransparency"), 0)
++            ? CVarGetFloat(CVAR_SETTING("HarkinianPad.TouchControlOpacity"), 0.5f)
++            : 1.0f);
++    CVarRegisterInteger(CVAR_SETTING("HarkinianPad.LegacyFixedTouchControls"), 0);
++    const int modernTouchControls =
++        !CVarGetInteger(CVAR_SETTING("HarkinianPad.LegacyFixedTouchControls"), 0);
++    CVarSetInteger(CVAR_SETTING("HarkinianPad.CustomizableTouchControls"), modernTouchControls);
++    CVarSetInteger(CVAR_SETTING("HarkinianPad.NativeHudTouch"), modernTouchControls);
++    HarkinianPad_SetCustomizableTouchControlsEnabled(modernTouchControls);
++    HarkinianPad_SetNativeHudTouchEnabled(modernTouchControls);
+ #endif
+ }
+diff --git a/soh/soh/Enhancements/mod_menu.cpp b/soh/soh/Enhancements/mod_menu.cpp
+index 391e374d7..8ce40ca28 100644
+--- a/soh/soh/Enhancements/mod_menu.cpp
++++ b/soh/soh/Enhancements/mod_menu.cpp
+@@ -3,12 +3,19 @@
+ #include <map>
+ #include <set>
+ #include <vector>
++#include <spdlog/spdlog.h>
+ 
+ #include <ship/utils/StringHelper.h>
+ #include <ship/Context.h>
+ 
+ #include "mod_menu.h"
+ #include "soh/Enhancements/audio/OotrsArchive.h"
++#include "ModCatalog.h"
++#include "ModPackImport.h"
++#include <nlohmann/json.hpp>
++#ifdef __IOS__
++#include "../../ios/HarkinianPadModImport.h"
++#endif
+ #include "soh/OTRGlobals.h"
+ #include "soh/util.h"
+ #include "soh/SohGui/MenuTypes.h"
+@@ -66,19 +73,13 @@ static WidgetInfo tabHotkeyWidget;
+ // - any private use character
+ #define SEPARATOR "|"
+ 
+-void SetEnabledModsCVarValue() {
+-    std::string s = "";
+-
+-    for (auto& modPath : enabledModFiles) {
+-        s += modPath + SEPARATOR;
+-    }
+-
+-    // remove trailing separator if present
+-    if (s.length() != 0) {
+-        s.pop_back();
+-    }
++static bool catalogUsesPaths = false;
++static std::string catalogWarning;
+ 
+-    CVarSetString(CVAR_ENABLED_MODS_NAME, s.c_str());
++void SetEnabledModsCVarValue() {
++    nlohmann::json selection = enabledModFiles;
++    CVarSetString(CVAR_SETTING("Mods.EnabledPaths"), selection.dump().c_str());
++    catalogUsesPaths = true;
+     Ship::Context::GetRawInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
+ }
+ 
+@@ -86,7 +87,7 @@ void AfterModChange() {
+     // disabled mods are always sorted
+     std::sort(disabledModFiles.begin(), disabledModFiles.end(), [](const std::string& a, const std::string& b) {
+         return std::lexicographical_compare(a.begin(), a.end(), b.begin(), b.end(),
+-                                            [](char c1, char c2) { return std::tolower(c1) < std::tolower(c2); });
++                                            [](char c1, char c2) { return std::tolower(static_cast<unsigned char>(c1)) < std::tolower(static_cast<unsigned char>(c2)); });
+     });
+ }
+ 
+@@ -210,73 +211,83 @@ bool IsOotrsExtension(std::string extension) {
+ }
+ 
+ void UpdateModFiles(bool init = false, bool reset = false) {
++    catalogWarning.clear();
+     if (init || reset) {
+         enabledModFiles.clear();
+-        enabledModFiles = GetEnabledModsFromCVar();
++        const std::string saved = CVarGetString(CVAR_SETTING("Mods.EnabledPaths"), "");
++        catalogUsesPaths = !saved.empty();
++        if (catalogUsesPaths) {
++            try {
++                enabledModFiles = nlohmann::json::parse(saved).get<std::vector<std::string>>();
++            } catch (...) {
++                catalogWarning = "Saved pack selection is invalid. Packs are disabled; select them again.";
++                SPDLOG_WARN("HarkinianPad mods: invalid saved selection; disabling packs");
++            }
++        } else {
++            enabledModFiles = GetEnabledModsFromCVar();
++        }
+         ClearSelectedMods();
+     }
+-    disabledModFiles.clear();
+-    unsupportedFiles.clear();
+     filePaths.clear();
+-    bool changed = false;
+-    std::string modsPath = Ship::Context::LocateFileAcrossAppDirs("mods", appShortName);
+-    std::map<std::string, std::string> tempMods;
++    unsupportedFiles.clear();
++    const std::filesystem::path modsPath = Ship::Context::LocateFileAcrossAppDirs("mods", appShortName);
++    std::error_code error;
+     std::vector<std::filesystem::path> ootrsFiles;
+-    if (modsPath.length() > 0 && std::filesystem::exists(modsPath)) {
+-        std::vector<std::filesystem::path> enabledFiles;
+-        if (std::filesystem::is_directory(modsPath)) {
+-            for (const std::filesystem::directory_entry& p : std::filesystem::recursive_directory_iterator(
+-                     modsPath, std::filesystem::directory_options::follow_directory_symlink)) {
+-                if (p.is_directory()) {
+-                    continue;
+-                }
+-                std::string filename =
+-                    p.path().filename().generic_string().substr(0, p.path().filename().generic_string().rfind("."));
+-                std::string extension = p.path().extension().generic_string();
+-                if (IsOotrsExtension(extension)) {
+-                    ootrsFiles.push_back(p.path());
+-                    continue;
+-                }
+-                if (!IsValidExtension(extension)) {
+-                    continue;
+-                }
+-                bool enabled = SohUtils::Contains(filename, enabledModFiles);
+-                if (!enabled) {
+-                    tempMods.emplace(p.path().lexically_normal().generic_string(), filename);
+-                }
+-                filePaths.emplace(filename, p.path());
+-            }
+-            if (tempMods.size() > 0) {
+-                changed = true;
+-                for (auto [path, name] : tempMods) {
+-                    enabledModFiles.push_back(name);
++    if (!modsPath.empty() && std::filesystem::is_directory(modsPath, error)) {
++        auto it = std::filesystem::recursive_directory_iterator(
++            modsPath, std::filesystem::directory_options::skip_permission_denied, error);
++        const auto end = std::filesystem::recursive_directory_iterator();
++        while (!error && it != end) {
++            // Do not follow either directory or file symlinks out of the mod directory.
++            if (!it->is_symlink(error) && it->is_regular_file(error)) {
++                if (IsOotrsExtension(it->path().extension().string())) {
++                    // Custom music packs are mounted separately, as upstream does.
++                    ootrsFiles.push_back(it->path());
++                } else if (IsValidExtension(it->path().extension().string())) {
++                    filePaths.emplace(it->path().lexically_relative(modsPath).generic_string(), it->path());
+                 }
+-                tempMods.clear();
+             }
+-            if (init) {
+-                std::vector<std::string> enabledTemp(enabledModFiles);
+-                for (std::string mod : enabledTemp) {
+-                    if (filePaths.contains(mod)) {
+-                        GetArchiveManager()->AddArchive(filePaths.at(mod).generic_string());
+-                    } else {
+-                        enabledModFiles.erase(std::find(enabledModFiles.begin(), enabledModFiles.end(), mod));
+-                        changed = true;
+-                    }
+-                }
+-                std::sort(ootrsFiles.begin(), ootrsFiles.end());
+-                SOH::MountOotrsArchives(ootrsFiles);
++            it.increment(error);
++        }
++    }
++    if (error) {
++        catalogWarning = "Some packs could not be scanned. Check Files permissions and refresh.";
++        SPDLOG_WARN("HarkinianPad mods: directory scan incomplete, error={}", error.value());
++    }
++    const auto selection = ModCatalog::Reconcile(filePaths, { enabledModFiles, {} }, !catalogUsesPaths);
++    enabledModFiles = selection.enabled;
++    disabledModFiles = selection.disabled;
++    AfterModChange();
++    size_t loaded = 0;
++    if (init) {
++        for (const auto& id : enabledModFiles) {
++            try {
++                // Also preflight manually copied packs before the runtime opens them.
++                ModPackImport::Validate(filePaths.at(id));
++                if (GetArchiveManager()->AddArchive(filePaths.at(id).generic_string())) ++loaded;
++            } catch (const std::exception&) {
++                SPDLOG_WARN("HarkinianPad mods: archive preflight rejected a pack");
+             }
+         }
+-        if (changed) {
+-            SetEnabledModsCVarValue();
++        std::sort(ootrsFiles.begin(), ootrsFiles.end());
++        SOH::MountOotrsArchives(ootrsFiles);
++        SPDLOG_INFO("HarkinianPad mods: discovered={}, enabled={}, disabled={}, loaded={}",
++                    filePaths.size(), enabledModFiles.size(), disabledModFiles.size(), loaded);
++        if (loaded != enabledModFiles.size()) {
++            catalogWarning = "Some enabled packs failed to load. Disable them and restart.";
++            SPDLOG_WARN("HarkinianPad mods: requested archives failed to load");
+         }
++        // Preserve the previous stem-based setting for rollback to an older build.
++        if (!catalogUsesPaths && !error) SetEnabledModsCVarValue();
+     }
+ }
+ 
+ extern "C" void gfx_texture_cache_clear();
+ 
+ void EnableMod(std::string file) {
+-    disabledModFiles.erase(std::find(disabledModFiles.begin(), disabledModFiles.end(), file));
++    auto found = std::find(disabledModFiles.begin(), disabledModFiles.end(), file);
++    if (found == disabledModFiles.end()) return;
++    disabledModFiles.erase(found);
+     enabledModFiles.insert(enabledModFiles.begin(), file);
+ 
+     // TODO: runtime changes
+@@ -286,7 +297,9 @@ void EnableMod(std::string file) {
+ }
+ 
+ void DisableMod(std::string file) {
+-    enabledModFiles.erase(std::find(enabledModFiles.begin(), enabledModFiles.end(), file));
++    auto found = std::find(enabledModFiles.begin(), enabledModFiles.end(), file);
++    if (found == enabledModFiles.end()) return;
++    enabledModFiles.erase(found);
+     disabledModFiles.insert(disabledModFiles.begin(), file);
+ 
+     // TODO: runtime changes
+@@ -343,6 +356,7 @@ void DrawMods(bool enabled) {
+     }
+ 
+     bool madeAnyChange = false;
++    std::string togglePack;
+     int switchFromIndex = -1;
+     int switchToIndex = -1;
+ 
+@@ -356,15 +370,8 @@ void DrawMods(bool enabled) {
+         if (enabled) {
+             ImGui::BeginGroup();
+         }
+-        // if (UIWidgets::StateButton((file + "_left_right").c_str(), enabled ? ICON_FA_ARROW_RIGHT :
+-        // ICON_FA_ARROW_LEFT,
+-        //                            ImVec2(25, 25), UIWidgets::ButtonOptions().Color(THEME_COLOR))) {
+-        //     if (enabled) {
+-        //         DisableMod(file);
+-        //     } else {
+-        //         EnableMod(file);
+-        //     }
+-        // }
++        if (ImGui::Button(((enabled ? "Disable##" : "Enable##") + file).c_str())) togglePack = file;
++        ImGui::SameLine();
+ 
+         // it's not relevant to reorder disabled mods
+         if (enabled) {
+@@ -399,6 +406,9 @@ void DrawMods(bool enabled) {
+ 
+         ImGui::SameLine();
+         std::string displayName = filePaths.at(file).filename().generic_string();
++        if (std::count_if(filePaths.begin(), filePaths.end(), [&](const auto& entry) {
++                return entry.second.filename().generic_string() == displayName;
++            }) > 1) displayName = file;
+         if (enabled) {
+             ImGui::PushID(file.c_str());
+             float selectableWidth =
+@@ -407,6 +417,7 @@ void DrawMods(bool enabled) {
+                                   ImVec2(selectableWidth, 0.0f)))
+                 HandleModSelection(i, file);
+             ImGui::PopID();
++            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", file.c_str());
+         } else {
+             ImGui::Text("%s", displayName.c_str());
+         }
+@@ -433,6 +444,12 @@ void DrawMods(bool enabled) {
+         HandleModDropBoundaries();
+     }
+ 
++    if (!togglePack.empty()) {
++        if (enabled) DisableMod(togglePack); else EnableMod(togglePack);
++        modRowBounds.clear();
++        return;
++    }
++
+     if (madeAnyChange) {
+         std::iter_swap(selectedModFiles.begin() + switchFromIndex, selectedModFiles.begin() + switchToIndex);
+         ClearSelectedMods();
+@@ -481,20 +498,30 @@ void ModMenuWindow::DrawElement() {
+ 
+     DrawCustomMusicSummary();
+ 
+-    // if (UIWidgets::Button(
+-    //         "Update", UIWidgets::ButtonOptions({ { .disabled = editing, .disabledTooltip = "Currently editing..." }
+-    //         })
+-    //                       .Size(UIWidgets::Sizes::Inline)
+-    //                       .Color(THEME_COLOR))) {
+-    //     UpdateModFiles();
+-    // }
+-    // ImGui::SameLine();
++#ifdef __IOS__
++    if (HarkinianPad_ModImportCompleted()) UpdateModFiles();
++    ImGui::BeginDisabled(HarkinianPad_ModImportBusy() || editing);
++    if (ImGui::Button("Import Packs from Files")) HarkinianPad_ImportMods();
++    ImGui::EndDisabled();
++    ImGui::TextWrapped("%s", HarkinianPad_ModImportStatus().c_str());
++#endif
++    ImGui::BeginDisabled(editing);
++    if (ImGui::Button("Refresh Packs")) UpdateModFiles();
++    ImGui::EndDisabled();
++    ImGui::TextWrapped("New packs start disabled. Edit the list, enable packs, then save and restart.");
++    if (!catalogWarning.empty()) ImGui::TextWrapped("%s", catalogWarning.c_str());
++#ifdef __IOS__
++    ImGui::BeginDisabled(HarkinianPad_ModImportBusy());
++#endif
+     if (UIWidgets::Button("Edit",
+                           UIWidgets::ButtonOptions({ { .disabled = editing, .disabledTooltip = "Already editing..." } })
+                               .Size(UIWidgets::Sizes::Inline)
+                               .Color(THEME_COLOR))) {
+         editing = true;
+     }
++#ifdef __IOS__
++    ImGui::EndDisabled();
++#endif
+     if (editing) {
+         ImGui::SameLine();
+         if (UIWidgets::Button("Cancel", UIWidgets::ButtonOptions().Size(UIWidgets::Sizes::Inline))) {
+@@ -502,11 +529,22 @@ void ModMenuWindow::DrawElement() {
+             UpdateModFiles(false, true);
+         }
+         ImGui::SameLine();
+-        if (UIWidgets::Button("Clear List", UIWidgets::ButtonOptions().Size(UIWidgets::Sizes::Inline))) {
+-            SohGui::RegisterPopup("Clear List",
+-                                  "Clear the current mod list and force a rebuild on next boot.\nClick Apply & Close "
++        if (UIWidgets::Button("Enable All", UIWidgets::ButtonOptions().Size(UIWidgets::Sizes::Inline))) {
++            SohGui::RegisterPopup("Enable All",
++                                  "Enable all discovered packs, including optional add-ons? Check the author's load-order instructions.",
++                                  "Enable All", "Cancel", [&]() {
++                                      enabledModFiles.insert(enabledModFiles.end(), disabledModFiles.begin(), disabledModFiles.end());
++                                      disabledModFiles.clear();
++                                      ClearSelectedMods();
++                                  });
++        }
++        ImGui::SameLine();
++        if (UIWidgets::Button("Disable All", UIWidgets::ButtonOptions().Size(UIWidgets::Sizes::Inline))) {
++            SohGui::RegisterPopup("Disable All",
++                                  "Disable every pack without deleting files.\nClick Apply & Close "
+                                   "to save this change.",
+-                                  "Clear", "Cancel", [&]() {
++                                  "Disable All", "Cancel", [&]() {
++                                      disabledModFiles.insert(disabledModFiles.end(), enabledModFiles.begin(), enabledModFiles.end());
+                                       enabledModFiles.clear();
+                                       ClearSelectedMods();
+                                       AfterModChange();
+@@ -533,7 +571,7 @@ void ModMenuWindow::DrawElement() {
+     ImGui::BeginDisabled(!editing);
+     if (ImGui::BeginTable("tableMods", 2, ImGuiTableFlags_BordersH | ImGuiTableFlags_BordersV)) {
+         ImGui::TableSetupColumn("Enabled Mods", ImGuiTableColumnFlags_WidthStretch, 200.0f);
+-        // ImGui::TableSetupColumn("Disabled Mods", ImGuiTableColumnFlags_WidthStretch, 200.0f);
++        ImGui::TableSetupColumn("Disabled Mods", ImGuiTableColumnFlags_WidthStretch, 200.0f);
+         ImGui::PushItemFlag(ImGuiItemFlags_Disabled, true);
+         ImGui::TableHeadersRow();
+         ImGui::PopItemFlag();
+@@ -543,17 +581,15 @@ void ModMenuWindow::DrawElement() {
+ 
+         if (ImGui::BeginChild("Enabled Mods", ImVec2(0, -8))) {
+             DrawMods(true);
+-
+-            ImGui::EndChild();
+         }
++        ImGui::EndChild();
+ 
+-        /*ImGui::TableNextColumn();
++        ImGui::TableNextColumn();
+ 
+         if (ImGui::BeginChild("Disabled Mods", ImVec2(0, -8))) {
+             DrawMods(false);
+-
+-            ImGui::EndChild();
+-        }*/
++        }
++        ImGui::EndChild();
+ 
+         ImGui::EndTable();
+     }
+@@ -565,12 +601,12 @@ void ModMenuWindow::InitElement() {
+ }
+ 
+ void RegisterModMenuWidgets() {
+-    enableModsWidget = { .name = "Enable Mods", .type = WidgetType::WIDGET_CVAR_CHECKBOX };
++    enableModsWidget = { .name = "Alternate Assets", .type = WidgetType::WIDGET_CVAR_CHECKBOX };
+     enableModsWidget.CVar(CVAR_SETTING("AltAssets"))
+         .RaceDisable(false)
+         .Options(UIWidgets::CheckboxOptions({ { .disabledTooltip = "Temporarily disabled while editing mods list." } })
+                      .Color(THEME_COLOR)
+-                     .Tooltip("Toggle mods. For graphics mods, this means toggling between default and mod graphics.")
++                     .Tooltip("Toggle alternate graphics. Use the pack lists below to enable or disable entire packs.")
+                      .DefaultValue(true))
+         .PreFunc([&](WidgetInfo& info) {
+             auto options = std::static_pointer_cast<UIWidgets::CheckboxOptions>(info.options);
 diff --git a/soh/soh/Extractor/Extract.cpp b/soh/soh/Extractor/Extract.cpp
-index 7819df6b1..c3d1e9eec 100644
+index 89da6e1b7..568cff148 100644
 --- a/soh/soh/Extractor/Extract.cpp
 +++ b/soh/soh/Extractor/Extract.cpp
 @@ -244,6 +244,16 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
@@ -387,10 +991,10 @@ index 7819df6b1..c3d1e9eec 100644
      // Open the directory of the app.
      DIR* d = opendir(mSearchPath.c_str());
 diff --git a/soh/soh/OTRGlobals.cpp b/soh/soh/OTRGlobals.cpp
-index c5e7164aa..619d55a58 100644
+index 1b4f62c47..da4e32d58 100644
 --- a/soh/soh/OTRGlobals.cpp
 +++ b/soh/soh/OTRGlobals.cpp
-@@ -63,6 +63,9 @@
+@@ -64,6 +64,9 @@
  
  #ifdef __APPLE__
  #include <SDL_scancode.h>
@@ -400,30 +1004,25 @@ index c5e7164aa..619d55a58 100644
  #else
  #include <SDL2/SDL_scancode.h>
  #endif
-@@ -81,9 +84,11 @@
- #include "soh/SohGui/ImGuiUtils.h"
- #include "ActorDB.h"
- #include "SaveManager.h"
-+#ifndef SOH_DISABLE_NETWORKING
- #include "soh/Network/CrowdControl/CrowdControl.h"
- #include "soh/Network/Sail/Sail.h"
- #include "soh/Network/Anchor/Anchor.h"
-+#endif
- #include "Enhancements/game-interactor/GameInteractor.h"
- #include "Enhancements/randomizer/draw.h"
- #include <libultraship/controller/controldeck/ControlDeck.h>
-@@ -129,6 +134,19 @@ const uint32_t defaultImGuiScale = 1;
+@@ -129,6 +132,26 @@ const uint32_t defaultImGuiScale = 1;
  
  const float imguiScaleOptionToValue[4] = { 0.75f, 1.0f, 1.5f, 2.0f };
  
++#ifdef __IOS__
++static bool IsIOSCompactDisplay() {
++    SDL_Rect displayBounds = {};
++    if (SDL_GetDisplayUsableBounds(0, &displayBounds) != 0) {
++        return false;
++    }
++    const int shortestSide = displayBounds.w < displayBounds.h ? displayBounds.w : displayBounds.h;
++    return shortestSide < 600;
++}
++#endif
++
 +static uint32_t GetDefaultImGuiScale() {
 +#ifdef __IOS__
-+    SDL_Rect displayBounds = {};
-+    if (SDL_GetDisplayUsableBounds(0, &displayBounds) == 0) {
-+        const int shortestSide = displayBounds.w < displayBounds.h ? displayBounds.w : displayBounds.h;
-+        if (shortestSide < 600) {
-+            return 0;
-+        }
++    if (IsIOSCompactDisplay()) {
++        return 0;
 +    }
 +#endif
 +    return defaultImGuiScale;
@@ -432,19 +1031,7 @@ index c5e7164aa..619d55a58 100644
  bool SoH_HandleConfigDrop(char* filePath);
  
  OTRGlobals* OTRGlobals::Instance;
-@@ -138,9 +156,11 @@ ItemTableManager* ItemTableManager::Instance;
- GameInteractor* GameInteractor::Instance;
- AudioCollection* AudioCollection::Instance;
- SpeechSynthesizer* SpeechSynthesizer::Instance;
-+#ifndef SOH_DISABLE_NETWORKING
- CrowdControl* CrowdControl::Instance;
- Sail* Sail::Instance;
- Anchor* Anchor::Instance;
-+#endif
- 
- extern "C" char** cameraStrings;
- 
-@@ -330,7 +350,11 @@ OTRGlobals::OTRGlobals() {
+@@ -330,7 +353,11 @@ OTRGlobals::OTRGlobals() {
      }
  
      previousImGuiScaleIndex = -1;
@@ -456,22 +1043,72 @@ index c5e7164aa..619d55a58 100644
      ScaleImGui();
  }
  
-@@ -650,6 +674,14 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -587,6 +614,21 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+             case ES_EXTRACT_ARGS: {
+ #if !defined(__SWITCH__) && !defined(__WIIU__)
+                 if (args.empty()) {
++#ifdef __IOS__
++                    SohGui::RegisterPopup(
++                        "Run Ship of Harkinian", "All files have been processed.", "Run Ship of Harkinian", "",
++                        [&]() {
++                            if (!std::filesystem::exists(Ship::Context::GetAppDirectoryPath(appShortName) +
++                                                         "/oot.o2r") &&
++                                !std::filesystem::exists(Ship::Context::GetAppDirectoryPath(appShortName) +
++                                                         "/oot-mq.o2r")) {
++                                extractStep = ES_EXTRACT;
++                                promptStep = PS_FILE_CHECK;
++                            } else {
++                                extractStep = ES_VERIFY;
++                            }
++                        });
++#else
+                     SohGui::RegisterPopup(
+                         "Run Ship of Harkinian", "All files have been processed. Run SoH?", "Yes", "No",
+                         [&]() {
+@@ -601,6 +643,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+                             }
+                         },
+                         [&]() { exit(0); });
++#endif
+                     break;
+                 }
+                 file = args.at(0);
+@@ -644,9 +687,16 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+                             std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName));
+ 
+                         if (!ootO2RExists) {
++#ifdef __IOS__
++                            SohGui::RegisterPopup(
++                                "No O2R Files",
++                                "No O2R files found. Import a supported ROM with Files to generate one.", "Continue",
++                                "", [&]() { promptStep = PS_LOCAL; });
++#else
+                             SohGui::RegisterPopup(
+                                 "No O2R Files", "No O2R files found. Generate one now?", "Yes", "No",
+                                 [&]() { promptStep = PS_LOCAL; }, [&]() { exit(0); });
++#endif
+                         } else {
+                             extractStep = ES_VERIFY;
+                         }
+@@ -672,6 +722,17 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                          continue;
                      }
                      case PS_FIRST: {
 +#ifdef __IOS__
 +                        promptStep = PS_WAIT;
++                        const char* filesLocation = IsIOSCompactDisplay() ? "On My iPhone" : "On My iPad";
++                        const std::string message =
++                            "Open Files and copy your legally acquired .z64, .n64, or .v64 ROM into\n" +
++                            std::string(filesLocation) + " > HarkinianPad (its Documents folder).\n" +
++                            "LiveContainer: use this app's Documents folder, not SystemData.\n" +
++                            "Leave HarkinianPad open, then return here and choose Rescan.";
 +                        SohGui::RegisterPopup(
-+                            "Import ROM in Files",
-+                            "Open Files and copy your legally acquired .z64, .n64, or .v64 ROM into\n"
-+                            "On My iPad > HarkinianPad. Return here, then choose Rescan.",
-+                            "Rescan", "Exit", [&]() { promptStep = PS_LOCAL; }, [&]() { exit(0); });
++                            "Import ROM in Files", message, "Rescan", "", [&]() { promptStep = PS_LOCAL; });
 +#else
                          if (!extract.ManuallySearchForRomMatchingType(RomSearchMode::Both)) {
                              promptStep = PS_FILE_CHECK;
                              continue;
-@@ -662,6 +694,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -684,6 +745,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                              extractCount = 0;
                              totalExtract = 0;
                          });
@@ -479,7 +1116,42 @@ index c5e7164aa..619d55a58 100644
                          continue;
                      }
                      case PS_SECOND: {
-@@ -980,7 +1013,7 @@ OTRGlobals::~OTRGlobals() {
+@@ -717,9 +779,19 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+                     std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName));
+ 
+                 if (!ootO2RExists) {
++#ifdef __IOS__
++                    SohGui::RegisterPopup(
++                        "No ROM Archives", "No ROM O2R files detected. Import a supported ROM with Files.", "Try Again",
++                        "", [&]() {
++                            extractStep = ES_EXTRACT;
++                            promptStep = PS_LOCAL;
++                        });
++                    continue;
++#else
+                     SohGui::RegisterPopup("No ROM Archives",
+                                           "No ROM O2R files detected. Please generate a ROM O2R and relaunch.", "OK",
+                                           "", [&]() { exit(0); });
++#endif
+                 }
+                 extractDone = true;
+                 continue;
+@@ -752,7 +824,14 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+                 try {
+                     extractionTask->get();
+                 } catch (const std::exception& e) {
++#ifdef __IOS__
++                    SohGui::RegisterPopup("Extraction Failed", e.what(), "Try Again", "", [&]() {
++                        extractStep = ES_EXTRACT;
++                        promptStep = PS_LOCAL;
++                    });
++#else
+                     SohGui::RegisterPopup("Extraction Crashed", e.what(), "Close", "", []() { exit(1); });
++#endif
+                 }
+                 extractionTask.reset();
+             } else {
+@@ -999,7 +1078,7 @@ OTRGlobals::~OTRGlobals() {
  }
  
  void OTRGlobals::ScaleImGui() {
@@ -488,178 +1160,245 @@ index c5e7164aa..619d55a58 100644
      if (imGuiScaleIndex == previousImGuiScaleIndex) {
          return;
      }
-@@ -1560,9 +1593,11 @@ extern "C" void InitOTR(int argc, char* argv[]) {
+diff --git a/soh/soh/SohGui/Menu.cpp b/soh/soh/SohGui/Menu.cpp
+index 642bc54a3..a591f279c 100644
+--- a/soh/soh/SohGui/Menu.cpp
++++ b/soh/soh/SohGui/Menu.cpp
+@@ -799,7 +799,7 @@ void Menu::DrawElement() {
+     options2.color = UIWidgets::Colors::Red;
+     options2.size = UIWidgets::Sizes::Inline;
+     options2.tooltip = "Reset"
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !defined(__IOS__)
+                        " (Command-R)"
+ #elif !defined(__SWITCH__) && !defined(__WIIU__)
+                        " (Ctrl+R)"
+@@ -808,9 +808,14 @@ void Menu::DrawElement() {
  #endif
-     SpeechSynthesizer::Instance->Init();
+         ;
+     if (UIWidgets::Button(ICON_FA_UNDO, options2)) {
+-        std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
+-            Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
+-            ->Dispatch("reset");
++        SohGui::mModalWindow->RegisterPopup(
++            "Reset Game", "Reset the game now? Any unsaved progress will be lost.", "Reset", "Cancel",
++            []() {
++                std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
++                    Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
++                    ->Dispatch("reset");
++            },
++            nullptr);
+     }
+     ImGui::SameLine();
+     UIWidgets::ButtonOptions options = {};
+@@ -840,9 +845,13 @@ void Menu::DrawElement() {
  
-+#ifndef SOH_DISABLE_NETWORKING
-     CrowdControl::Instance = new CrowdControl();
-     Sail::Instance = new Sail();
-     Anchor::Instance = new Anchor();
+     // Increase sidebar width on larger screens to accommodate people scaling their menus.
+     float sidebarWidth = 200 - style.ItemSpacing.x;
++#ifdef __IOS__
++    sidebarWidth = 240 - style.ItemSpacing.x;
++#else
+     if (menuSize.x > 1600) {
+         sidebarWidth = menuSize.x * 0.15f;
+     }
 +#endif
  
-     OTRMessage_Init();
-     OTRAudio_Init();
-@@ -1588,6 +1623,7 @@ extern "C" void InitOTR(int argc, char* argv[]) {
-     }
+     const char* sidebarCvar = menuEntries.at(headerIndex).sidebarCvar;
  
-     srand(static_cast<unsigned int>(now));
-+#ifndef SOH_DISABLE_NETWORKING
-     SDLNet_Init();
-     if (CVarGetInteger(CVAR_REMOTE_CROWD_CONTROL("Enabled"), 0)) {
-         CrowdControl::Instance->Enable();
-@@ -1598,6 +1634,7 @@ extern "C" void InitOTR(int argc, char* argv[]) {
-     if (CVarGetInteger(CVAR_REMOTE_ANCHOR("Enabled"), 0)) {
-         Anchor::Instance->Enable();
+@@ -889,9 +898,15 @@ void Menu::DrawElement() {
+     std::string sectionMenuId = sectionIndex + " Settings";
+     size_t columns = sidebar->at(sectionIndex).columnCount;
+     size_t columnFuncs = sidebar->at(sectionIndex).columnWidgets.size();
++#ifdef __IOS__
++    if ((sectionWidth - style.ItemSpacing.x * columns) / columns < 720.0f) {
++        columns = 1;
++    }
++#else
+     if (windowWidth < 800) {
+         columns = 1;
      }
 +#endif
-     ShipInit::InitAll();
-     Rando::StaticData::InitHashMaps();
-     OTRGlobals::Instance->gRandoContext->AddExcludedOptions();
-@@ -1610,6 +1647,7 @@ extern "C" void SaveManager_ThreadPoolWait() {
- extern "C" void DeinitOTR() {
-     SaveManager_ThreadPoolWait();
-     OTRAudio_Exit();
-+#ifndef SOH_DISABLE_NETWORKING
-     if (CVarGetInteger(CVAR_REMOTE_CROWD_CONTROL("Enabled"), 0)) {
-         CrowdControl::Instance->Disable();
-     }
-@@ -1620,6 +1658,7 @@ extern "C" void DeinitOTR() {
-         Anchor::Instance->Disable();
-     }
-     SDLNet_Quit();
-+#endif
- 
-     // Destroying gui here because we have shared ptrs to LUS objects which output to SPDLOG which is destroyed before
-     // these shared ptrs.
+     float columnWidth = (sectionWidth - style.ItemSpacing.x * columns) / columns;
+     bool useColumns = columns > 1;
+     if (!useColumns || (headerSearch && menuSearchText.length() > 0)) {
+diff --git a/soh/soh/SohGui/ResolutionEditor.cpp b/soh/soh/SohGui/ResolutionEditor.cpp
+index 5a9231565..e0b592555 100644
+--- a/soh/soh/SohGui/ResolutionEditor.cpp
++++ b/soh/soh/SohGui/ResolutionEditor.cpp
+@@ -233,7 +233,7 @@ void ResolutionCustomWidget(WidgetInfo& info) {
+     // Collapsible panel for additional settings
+     UIWidgets::PushStyleHeader(THEME_COLOR);
+     if (ImGui::CollapsingHeader("Additional Settings")) {
+-#if defined(__SWITCH__) || defined(__WIIU__)
++#if defined(__SWITCH__) || defined(__WIIU__) || defined(__IOS__)
+         // Disable aspect correction, stretching the framebuffer to fill the viewport.
+         // This option is only really needed on systems limited to 16:9 TV resolutions, such as consoles.
+         // The associated cvar is still functional on PC platforms if you want to use it though.
 diff --git a/soh/soh/SohGui/SohGui.cpp b/soh/soh/SohGui/SohGui.cpp
-index c00083e0b..0f5d6bda6 100644
+index 986f93376..56e469ce0 100644
 --- a/soh/soh/SohGui/SohGui.cpp
 +++ b/soh/soh/SohGui/SohGui.cpp
-@@ -22,7 +22,9 @@
- #include "soh/Notification/Notification.h"
- #include "soh/Enhancements/TimeDisplay/TimeDisplay.h"
- #include "soh/Enhancements/mod_menu.h"
-+#ifndef SOH_DISABLE_NETWORKING
- #include "soh/Network/Anchor/Anchor.h"
-+#endif
+@@ -56,7 +56,7 @@ static const inline std::vector<std::pair<const char*, const char*>> audioBacken
+ #if defined(__linux)
+     { "pulse", "PulseAudio" },
+ #endif
+-#ifdef __APPLE__
++#if defined(__APPLE__) && !defined(__IOS__)
+     { "coreaudio", "Core Audio" },
+ #endif
+     { "sdl", "SDL Audio" }
+diff --git a/soh/soh/SohGui/SohMenuSettings.cpp b/soh/soh/SohGui/SohMenuSettings.cpp
+index 476f99f3f..c198e6a8e 100644
+--- a/soh/soh/SohGui/SohMenuSettings.cpp
++++ b/soh/soh/SohGui/SohMenuSettings.cpp
+@@ -9,6 +9,10 @@
+ #include <ship/controller/controldeck/ControlDeck.h>
+ #include <ship/Context.h>
  
- namespace SohGui {
- 
-@@ -89,7 +91,9 @@ std::shared_ptr<PlandomizerWindow> mPlandomizerWindow;
- std::shared_ptr<SohModalWindow> mModalWindow;
- std::shared_ptr<Notification::Window> mNotificationWindow;
- std::shared_ptr<TimeDisplayWindow> mTimeDisplayWindow;
-+#ifndef SOH_DISABLE_NETWORKING
- std::shared_ptr<AnchorRoomWindow> mAnchorRoomWindow;
++#ifdef __IOS__
++#include "ios/HarkinianPadTouchControls.h"
 +#endif
- 
- UIWidgets::Colors GetMenuThemeColor() {
-     return mSohMenu->GetMenuThemeColor();
-@@ -200,8 +204,10 @@ void SetupGuiElements() {
-     mNotificationWindow->Show();
-     mTimeDisplayWindow = std::make_shared<TimeDisplayWindow>(CVAR_WINDOW("TimeDisplayEnabled"), "Additional Timers");
-     gui->AddGuiWindow(mTimeDisplayWindow);
-+#ifndef SOH_DISABLE_NETWORKING
-     mAnchorRoomWindow = std::make_shared<AnchorRoomWindow>(CVAR_WINDOW("AnchorRoom"), "Anchor Room");
-     gui->AddGuiWindow(mAnchorRoomWindow);
++
+ extern "C" {
+ #include "include/z64audio.h"
+ #include "variables.h"
+@@ -138,7 +142,7 @@ void SohMenu::AddMenuSettings() {
+                      .Tooltip("Changes the Theme of the Menu Widgets.")
+                      .ComboMap(menuThemeOptions)
+                      .DefaultIndex(Colors::LightBlue));
+-#if not defined(__SWITCH__) and not defined(__WIIU__)
++#if !defined(__SWITCH__) && !defined(__WIIU__) && !defined(__IOS__)
+     AddWidget(path, "Menu Controller Navigation", WIDGET_CVAR_CHECKBOX)
+         .CVar(CVAR_IMGUI_CONTROLLER_NAV)
+         .RaceDisable(false)
+@@ -334,10 +338,21 @@ void SohMenu::AddMenuSettings() {
+     path.sidebarName = "Graphics";
+     AddSidebarEntry("Settings", "Graphics", 3);
+     AddWidget(path, "Graphics Options", WIDGET_SEPARATOR_TEXT);
++#ifndef __IOS__
+     AddWidget(path, "Toggle Fullscreen", WIDGET_BUTTON)
+         .RaceDisable(false)
+         .Callback([](WidgetInfo& info) { Ship::Context::GetRawInstance()->GetWindow()->ToggleFullscreen(); })
+         .Options(ButtonOptions().Tooltip("Toggles Fullscreen On/Off."));
++#else
++    AddWidget(path, "Native Screen Resolution", WIDGET_CVAR_CHECKBOX)
++        .CVar("gSettings.IOS.NativeResolution")
++        .RaceDisable(false)
++        .Options(CheckboxOptions()
++                     .DefaultValue(false)
++                     .Tooltip("Renders at the screen's full pixel resolution instead of a third of it. Sharper, "
++                              "but much heavier on the GPU, battery and temperature. Internal Resolution "
++                              "multiplies on top of this."));
 +#endif
+     AddWidget(path, "Internal Resolution", WIDGET_CVAR_SLIDER_FLOAT)
+         .CVar(CVAR_INTERNAL_RESOLUTION)
+         .RaceDisable(false)
+@@ -436,6 +451,89 @@ void SohMenu::AddMenuSettings() {
+     path.sidebarName = "Controls";
+     path.column = SECTION_COLUMN_1;
+     AddSidebarEntry("Settings", "Controls", 2);
++#ifdef __IOS__
++    AddWidget(path, "Touch Controls", WIDGET_CVAR_CHECKBOX)
++        .CVar(CVAR_SETTING("HarkinianPad.TouchControls"))
++        .RaceDisable(false)
++        .PreFunc([](WidgetInfo& info) {
++            info.isHidden = !HarkinianPad_TouchControlsAvailable();
++        })
++        .Callback([](WidgetInfo& info) {
++            HarkinianPad_SetTouchControlsEnabled(
++                CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchControls"), 1));
++        })
++        .Options(CheckboxOptions()
++                     .DefaultValue(true)
++                     .Tooltip("Shows the touch controller. Disable it when using a physical controller."));
++    AddWidget(path, "Touch Control Transparency", WIDGET_CVAR_CHECKBOX)
++        .CVar(CVAR_SETTING("HarkinianPad.TouchControlTransparency"))
++        .RaceDisable(false)
++        .PreFunc([](WidgetInfo& info) {
++            info.isHidden = !HarkinianPad_TouchControlsAvailable();
++        })
++        .Callback([](WidgetInfo& info) {
++            const bool enabled =
++                CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchControlTransparency"), 0);
++            HarkinianPad_SetTouchControlsOpacity(
++                enabled ? CVarGetFloat(CVAR_SETTING("HarkinianPad.TouchControlOpacity"), 0.5f) : 1.0f);
++        })
++        .Options(CheckboxOptions()
++                     .DefaultValue(false)
++                     .Tooltip("Allows the touch controls to use the opacity selected below. Input areas are "
++                              "unchanged."));
++    AddWidget(path, "Touch Control Opacity", WIDGET_CVAR_SLIDER_FLOAT)
++        .CVar(CVAR_SETTING("HarkinianPad.TouchControlOpacity"))
++        .RaceDisable(false)
++        .PreFunc([](WidgetInfo& info) {
++            info.isHidden = !HarkinianPad_TouchControlsAvailable() ||
++                            !CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchControlTransparency"), 0);
++        })
++        .Callback([](WidgetInfo& info) {
++            HarkinianPad_SetTouchControlsOpacity(
++                CVarGetFloat(CVAR_SETTING("HarkinianPad.TouchControlOpacity"), 0.5f));
++        })
++        .Options(FloatSliderOptions()
++                     .IsPercentage()
++                     .Min(0.25f)
++                     .Max(1.0f)
++                     .DefaultValue(0.5f)
++                     .Tooltip("Sets touch-control opacity. Lower values show more of the game beneath them."));
++    AddWidget(path, "Legacy Fixed Touch Controls", WIDGET_CVAR_CHECKBOX)
++        .CVar(CVAR_SETTING("HarkinianPad.LegacyFixedTouchControls"))
++        .RaceDisable(false)
++        .PreFunc([](WidgetInfo& info) {
++            info.isHidden = !HarkinianPad_TouchControlsAvailable();
++        })
++        .Callback([](WidgetInfo& info) {
++            const bool modernTouchControls =
++                !CVarGetInteger(CVAR_SETTING("HarkinianPad.LegacyFixedTouchControls"), 0);
++            CVarSetInteger(CVAR_SETTING("HarkinianPad.CustomizableTouchControls"), modernTouchControls);
++            CVarSetInteger(CVAR_SETTING("HarkinianPad.NativeHudTouch"), modernTouchControls);
++            HarkinianPad_SetCustomizableTouchControlsEnabled(modernTouchControls);
++            HarkinianPad_SetNativeHudTouchEnabled(modernTouchControls);
++        })
++        .Options(CheckboxOptions()
++                     .DefaultValue(false)
++                     .Tooltip("Uses the previous fixed UIKit layout and disables customization, native HUD "
++                              "artwork, and the Z hold latch."));
++    AddWidget(path, "Customize Touch Layout", WIDGET_BUTTON)
++        .RaceDisable(false)
++        .PreFunc([](WidgetInfo& info) {
++            info.isHidden = !HarkinianPad_TouchControlsAvailable();
++            const bool available =
++                CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchControls"), 1) &&
++                !CVarGetInteger(CVAR_SETTING("HarkinianPad.LegacyFixedTouchControls"), 0);
++            info.options->disabled = !available;
++            info.options->disabledTooltip =
++                "Enable Touch Controls and turn off Legacy Fixed Touch Controls first.";
++        })
++        .Callback([](WidgetInfo& info) {
++            HarkinianPad_BeginTouchLayoutEditing();
++        })
++        .Options(ButtonOptions().Tooltip(
++            "Closes Settings and opens the layout editor. Drag controls, resize the selected control, hide "
++            "unused buttons, or restore the phone or tablet defaults."));
++#endif
+     AddWidget(path, "Clear Devices", WIDGET_BUTTON)
+         .Callback([](WidgetInfo& info) {
+             SohGui::mModalWindow->RegisterPopup(
+diff --git a/soh/src/code/graph.c b/soh/src/code/graph.c
+index 4190955a9..a27c529e0 100644
+--- a/soh/src/code/graph.c
++++ b/soh/src/code/graph.c
+@@ -508,6 +508,11 @@ static void RunFrame() {
+ 
+ void Graph_ThreadEntry(void* arg0) {
+     while (WindowIsRunning()) {
++#ifdef __IOS__
++        if (!WindowIsFrameReady()) {
++            continue;
++        }
++#endif
+         RunFrame();
+     }
  }
- 
- void Destroy() {
-@@ -237,7 +243,9 @@ void Destroy() {
-     mTimeSplitWindow = nullptr;
-     mPlandomizerWindow = nullptr;
-     mTimeDisplayWindow = nullptr;
-+#ifndef SOH_DISABLE_NETWORKING
-     mAnchorRoomWindow = nullptr;
-+#endif
- }
- 
- void RegisterPopup(std::string title, std::string message, std::string button1, std::string button2,
-diff --git a/soh/soh/SohGui/SohMenu.cpp b/soh/soh/SohGui/SohMenu.cpp
-index 584f6343a..ae30f0e84 100644
---- a/soh/soh/SohGui/SohMenu.cpp
-+++ b/soh/soh/SohGui/SohMenu.cpp
-@@ -87,7 +87,9 @@ void SohMenu::AddMenuElements() {
-     AddMenuSettings();
-     AddMenuEnhancements();
-     AddMenuRandomizer();
-+#ifndef SOH_DISABLE_NETWORKING
-     AddMenuNetwork();
-+#endif
-     AddMenuDevTools();
- 
-     if (CVarGetInteger(CVAR_SETTING("Menu.SidebarSearch"), 0)) {
-diff --git a/soh/ios/Info.plist.in b/soh/ios/Info.plist.in
-new file mode 100644
-index 000000000..7de8e1c2b
---- /dev/null
-+++ b/soh/ios/Info.plist.in
-@@ -0,0 +1,63 @@
-+<?xml version="1.0" encoding="UTF-8"?>
-+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "https://www.apple.com/DTDs/PropertyList-1.0.dtd">
-+<plist version="1.0">
-+<dict>
-+    <key>CFBundleDevelopmentRegion</key>
-+    <string>en</string>
-+    <key>CFBundleDisplayName</key>
-+    <string>HarkinianPad</string>
-+    <key>CFBundleExecutable</key>
-+    <string>${MACOSX_BUNDLE_EXECUTABLE_NAME}</string>
-+    <key>CFBundleIdentifier</key>
-+    <string>${MACOSX_BUNDLE_GUI_IDENTIFIER}</string>
-+    <key>CFBundleInfoDictionaryVersion</key>
-+    <string>6.0</string>
-+    <key>CFBundleName</key>
-+    <string>HarkinianPad</string>
-+    <key>CFBundlePackageType</key>
-+    <string>APPL</string>
-+    <key>CFBundleShortVersionString</key>
-+    <string>@HARKINIANPAD_VERSION@</string>
-+    <key>CFBundleVersion</key>
-+    <string>@HARKINIANPAD_BUILD_NUMBER@</string>
-+    <key>GCSupportedGameControllers</key>
-+    <array>
-+        <dict>
-+            <key>ProfileName</key>
-+            <string>ExtendedGamepad</string>
-+        </dict>
-+    </array>
-+    <key>GCRequiresControllerUserInteraction</key>
-+    <dict>
-+        <key>iOS</key>
-+        <true/>
-+    </dict>
-+    <key>GCSupportsControllerUserInteraction</key>
-+    <true/>
-+    <key>LSApplicationCategoryType</key>
-+    <string>public.app-category.games</string>
-+    <key>LSSupportsOpeningDocumentsInPlace</key>
-+    <true/>
-+    <key>UIFileSharingEnabled</key>
-+    <true/>
-+    <key>UIRequiredDeviceCapabilities</key>
-+    <array>
-+        <string>arm64</string>
-+        <string>metal</string>
-+    </array>
-+    <key>UIRequiresFullScreen</key>
-+    <true/>
-+    <key>UIStatusBarHidden</key>
-+    <true/>
-+    <key>UISupportedInterfaceOrientations</key>
-+    <array>
-+        <string>UIInterfaceOrientationLandscapeLeft</string>
-+        <string>UIInterfaceOrientationLandscapeRight</string>
-+    </array>
-+    <key>UISupportedInterfaceOrientations~ipad</key>
-+    <array>
-+        <string>UIInterfaceOrientationLandscapeLeft</string>
-+        <string>UIInterfaceOrientationLandscapeRight</string>
-+    </array>
-+</dict>
-+</plist>
 diff --git a/soh/src/code/main.c b/soh/src/code/main.c
 index 98c632665..05922fdf1 100644
 --- a/soh/src/code/main.c
@@ -686,169 +1425,491 @@ index 98c632665..05922fdf1 100644
  int main(int argc, char* argv[]) {
  #endif
      GameConsole_Init();
-diff --git a/soh/src/code/graph.c b/soh/src/code/graph.c
-index 1b7922592..fd66f6d61 100644
---- a/soh/src/code/graph.c
-+++ b/soh/src/code/graph.c
-@@ -518,6 +518,11 @@ static void RunFrame() {
- 
- void Graph_ThreadEntry(void* arg0) {
-     while (WindowIsRunning()) {
+diff --git a/soh/src/code/z_parameter.c b/soh/src/code/z_parameter.c
+index 524ecd89f..2a3a59b95 100644
+--- a/soh/src/code/z_parameter.c
++++ b/soh/src/code/z_parameter.c
+@@ -19,6 +19,13 @@
+ #include "soh/Enhancements/randomizer/randomizer_grotto.h"
+ #include "soh/OTRGlobals.h"
+ #include "soh/ResourceManagerHelpers.h"
++
 +#ifdef __IOS__
-+        if (!WindowIsFrameReady()) {
-+            continue;
++#include "ios/HarkinianPadTouchControls.h"
++#define HARKINIANPAD_TOUCH_ALPHA(alpha) HarkinianPad_GetNativeHudTouchAlpha(alpha)
++#else
++#define HARKINIANPAD_TOUCH_ALPHA(alpha) (alpha)
++#endif
+ #include "soh/Enhancements/gameplaystats.h"
+ #include "soh/ObjectExtension/ActorMaximumHealth.h"
+ #include "soh/Enhancements/speedrun/Speedrun.h"
+@@ -4155,13 +4162,78 @@ void Interface_DrawItemButtons(PlayState* play) {
+         C_Down_BTN_Pos[0] = OTRGetRectDimensionFromRightEdge(C_Down_BTN_Pos_ori[0]);
+     }
+ 
++    int CLeftDrawSize = R_ITEM_BTN_WIDTH(1);
++    int CDownDrawSize = R_ITEM_BTN_WIDTH(2);
++    int CRightDrawSize = R_ITEM_BTN_WIDTH(3);
++    int CLeftDrawDD = R_ITEM_BTN_DD(1) << 1;
++    int CDownDrawDD = R_ITEM_BTN_DD(2) << 1;
++    int CRightDrawDD = R_ITEM_BTN_DD(3) << 1;
++    float nativeHudBScale = 1.0f;
++    float nativeHudCScale = 1.0f;
++#ifdef __IOS__
++    nativeHudBScale =
++        HarkinianPad_GetNativeHudButtonScale(HARKINIANPAD_HUD_BUTTON_B, OTRGetAspectRatio());
++    nativeHudCScale =
++        HarkinianPad_GetNativeHudButtonScale(HARKINIANPAD_HUD_BUTTON_C_LEFT, OTRGetAspectRatio());
++    if (nativeHudBScale != 1.0f) {
++        BBtnScaled = MAX(1, BBtnScaled * nativeHudBScale);
++        BBtn_factor = (1 << 10) * BBtn_Size / BBtnScaled;
++    }
++    if (nativeHudCScale != 1.0f) {
++        CLeftScaled = MAX(1, CLeftScaled * nativeHudCScale);
++        CRightScaled = MAX(1, CRightScaled * nativeHudCScale);
++        CUpScaled = MAX(1, CUpScaled * nativeHudCScale);
++        CDownScaled = MAX(1, CDownScaled * nativeHudCScale);
++        CLeft_factor = (1 << 10) * C_Left_BTN_Size / CLeftScaled;
++        CRight_factor = (1 << 10) * C_Right_BTN_Size / CRightScaled;
++        CUp_factor = (1 << 10) * C_Up_BTN_Size / CUpScaled;
++        CDown_factor = (1 << 10) * C_Down_BTN_Size / CDownScaled;
++        PositionAdjustment = CDownScaled / 2;
++        CLeftDrawSize = CLeftScaled;
++        CDownDrawSize = CDownScaled;
++        CRightDrawSize = CRightScaled;
++        CLeftDrawDD = CLeft_factor;
++        CDownDrawDD = CDown_factor;
++        CRightDrawDD = CRight_factor;
++    }
++
++    float nativeHudX;
++    float nativeHudY;
++    if (HarkinianPad_GetNativeHudButtonCenter(HARKINIANPAD_HUD_BUTTON_B, OTRGetAspectRatio(), &nativeHudX,
++                                               &nativeHudY)) {
++        PosX_BtnB = nativeHudX - BBtnScaled * 0.5f;
++        PosY_BtnB = nativeHudY - BBtnScaled * 0.5f;
++    }
++    if (HarkinianPad_GetNativeHudButtonCenter(HARKINIANPAD_HUD_BUTTON_C_LEFT, OTRGetAspectRatio(), &nativeHudX,
++                                               &nativeHudY)) {
++        C_Left_BTN_Pos[0] = nativeHudX - CLeftScaled * 0.5f;
++        C_Left_BTN_Pos[1] = nativeHudY - CLeftScaled * 0.5f;
++    }
++    if (HarkinianPad_GetNativeHudButtonCenter(HARKINIANPAD_HUD_BUTTON_C_RIGHT, OTRGetAspectRatio(), &nativeHudX,
++                                               &nativeHudY)) {
++        C_Right_BTN_Pos[0] = nativeHudX - CRightScaled * 0.5f;
++        C_Right_BTN_Pos[1] = nativeHudY - CRightScaled * 0.5f;
++    }
++    if (HarkinianPad_GetNativeHudButtonCenter(HARKINIANPAD_HUD_BUTTON_C_UP, OTRGetAspectRatio(), &nativeHudX,
++                                               &nativeHudY)) {
++        C_Up_BTN_Pos[0] = nativeHudX - CUpScaled * 0.5f;
++        C_Up_BTN_Pos[1] = nativeHudY - CUpScaled * 0.5f;
++    }
++    if (HarkinianPad_GetNativeHudButtonCenter(HARKINIANPAD_HUD_BUTTON_C_DOWN, OTRGetAspectRatio(), &nativeHudX,
++                                               &nativeHudY)) {
++        C_Down_BTN_Pos[0] = nativeHudX - CDownScaled * 0.5f;
++        C_Down_BTN_Pos[1] = nativeHudY - CDownScaled * 0.5f;
++    }
++#endif
++
+     OPEN_DISPS(play->state.gfxCtx);
+ 
+     // B Button Color & Texture
+     // Also loads the Item Button Texture reused by other buttons afterwards
+     gDPPipeSync(OVERLAY_DISP++);
+     gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATEIA_PRIM, G_CC_MODULATEIA_PRIM);
+-    gDPSetPrimColor(OVERLAY_DISP++, 0, 0, bButtonColor.r, bButtonColor.g, bButtonColor.b, interfaceCtx->bAlpha);
++    gDPSetPrimColor(OVERLAY_DISP++, 0, 0, bButtonColor.r, bButtonColor.g, bButtonColor.b,
++                    HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->bAlpha));
+     gDPSetEnvColor(OVERLAY_DISP++, 0, 0, 0, 255);
+ 
+     OVERLAY_DISP = Gfx_TextureIA8(OVERLAY_DISP, gButtonBackgroundTex, BBtn_Size, BBtn_Size, PosX_BtnB, PosY_BtnB,
+@@ -4170,27 +4242,27 @@ void Interface_DrawItemButtons(PlayState* play) {
+     // C-Left Button Color & Texture
+     gDPPipeSync(OVERLAY_DISP++);
+     gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cLeftButtonColor.r, cLeftButtonColor.g, cLeftButtonColor.b,
+-                    interfaceCtx->cLeftAlpha);
++                    HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cLeftAlpha));
+     gSPWideTextureRectangle(OVERLAY_DISP++, C_Left_BTN_Pos[0] << 2, C_Left_BTN_Pos[1] << 2,
+-                            (C_Left_BTN_Pos[0] + R_ITEM_BTN_WIDTH(1)) << 2,
+-                            (C_Left_BTN_Pos[1] + R_ITEM_BTN_WIDTH(1)) << 2, G_TX_RENDERTILE, 0, 0,
+-                            R_ITEM_BTN_DD(1) << 1, R_ITEM_BTN_DD(1) << 1);
++                            (C_Left_BTN_Pos[0] + CLeftDrawSize) << 2,
++                            (C_Left_BTN_Pos[1] + CLeftDrawSize) << 2, G_TX_RENDERTILE, 0, 0,
++                            CLeftDrawDD, CLeftDrawDD);
+ 
+     // C-Down Button Color & Texture
+     gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cDownButtonColor.r, cDownButtonColor.g, cDownButtonColor.b,
+-                    interfaceCtx->cDownAlpha);
++                    HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cDownAlpha));
+     gSPWideTextureRectangle(OVERLAY_DISP++, C_Down_BTN_Pos[0] << 2, C_Down_BTN_Pos[1] << 2,
+-                            (C_Down_BTN_Pos[0] + R_ITEM_BTN_WIDTH(2)) << 2,
+-                            (C_Down_BTN_Pos[1] + R_ITEM_BTN_WIDTH(2)) << 2, G_TX_RENDERTILE, 0, 0,
+-                            R_ITEM_BTN_DD(2) << 1, R_ITEM_BTN_DD(2) << 1);
++                            (C_Down_BTN_Pos[0] + CDownDrawSize) << 2,
++                            (C_Down_BTN_Pos[1] + CDownDrawSize) << 2, G_TX_RENDERTILE, 0, 0,
++                            CDownDrawDD, CDownDrawDD);
+ 
+     // C-Right Button Color & Texture
+     gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cRightButtonColor.r, cRightButtonColor.g, cRightButtonColor.b,
+-                    interfaceCtx->cRightAlpha);
++                    HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cRightAlpha));
+     gSPWideTextureRectangle(OVERLAY_DISP++, C_Right_BTN_Pos[0] << 2, C_Right_BTN_Pos[1] << 2,
+-                            (C_Right_BTN_Pos[0] + R_ITEM_BTN_WIDTH(3)) << 2,
+-                            (C_Right_BTN_Pos[1] + R_ITEM_BTN_WIDTH(3)) << 2, G_TX_RENDERTILE, 0, 0,
+-                            R_ITEM_BTN_DD(3) << 1, R_ITEM_BTN_DD(3) << 1);
++                            (C_Right_BTN_Pos[0] + CRightDrawSize) << 2,
++                            (C_Right_BTN_Pos[1] + CRightDrawSize) << 2, G_TX_RENDERTILE, 0, 0,
++                            CRightDrawDD, CRightDrawDD);
+ 
+     if ((pauseCtx->state < 8) || (pauseCtx->state >= 18)) {
+         if ((play->pauseCtx.state != 0) || (play->pauseCtx.debugState != 0)) {
+@@ -4246,13 +4318,15 @@ void Interface_DrawItemButtons(PlayState* play) {
+                 temp = interfaceCtx->healthAlpha;
+             }
+ 
+-            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cUpButtonColor.r, cUpButtonColor.g, cUpButtonColor.b, temp);
++            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cUpButtonColor.r, cUpButtonColor.g, cUpButtonColor.b,
++                            HARKINIANPAD_TOUCH_ALPHA(temp));
+             gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATEIA_PRIM, G_CC_MODULATEIA_PRIM);
+             gSPWideTextureRectangle(OVERLAY_DISP++, C_Up_BTN_Pos[0] << 2, C_Up_BTN_Pos[1] << 2,
+-                                    (C_Up_BTN_Pos[0] + 16) << 2, (C_Up_BTN_Pos[1] + 16) << 2, G_TX_RENDERTILE, 0, 0,
+-                                    2 << 10, 2 << 10);
++                                    (C_Up_BTN_Pos[0] + CUpScaled) << 2,
++                                    (C_Up_BTN_Pos[1] + CUpScaled) << 2, G_TX_RENDERTILE, 0, 0,
++                                    CUp_factor, CUp_factor);
+             gDPPipeSync(OVERLAY_DISP++);
+-            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, temp);
++            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, HARKINIANPAD_TOUCH_ALPHA(temp));
+             gDPSetEnvColor(OVERLAY_DISP++, 0, 0, 0, 0);
+             gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
+                               PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
+@@ -4261,9 +4335,15 @@ void Interface_DrawItemButtons(PlayState* play) {
+                                    G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOMASK,
+                                    G_TX_NOLOD, G_TX_NOLOD);
+ 
+-            gSPWideTextureRectangle(OVERLAY_DISP++, C_Up_BTN_Pos[0] - LabelX_Navi << 2,
+-                                    C_Up_BTN_Pos[1] + LabelY_Navi << 2, (C_Up_BTN_Pos[0] - LabelX_Navi + 32) << 2,
+-                                    (C_Up_BTN_Pos[1] + LabelY_Navi + 8) << 2, G_TX_RENDERTILE, 0, 0, 1 << 10, 1 << 10);
++            const s16 naviLabelWidth = MAX(1, 32 * nativeHudCScale);
++            const s16 naviLabelHeight = MAX(1, 8 * nativeHudCScale);
++            const s16 naviLabelX = C_Up_BTN_Pos[0] + (CUpScaled - naviLabelWidth) / 2;
++            const s16 naviLabelY = C_Up_BTN_Pos[1] + MAX(1, LabelY_Navi * nativeHudCScale);
++            gSPWideTextureRectangle(
++                OVERLAY_DISP++, naviLabelX << 2, naviLabelY << 2,
++                (naviLabelX + naviLabelWidth) << 2, (naviLabelY + naviLabelHeight) << 2,
++                G_TX_RENDERTILE, 0, 0, (1 << 10) * 32 / naviLabelWidth,
++                (1 << 10) * 8 / naviLabelHeight);
+         }
+ 
+         sCUpTimer--;
+@@ -4395,15 +4475,30 @@ void Interface_DrawItemButtons(PlayState* play) {
+                 ItemIconPos[2][1] = ItemIconPos_ori[2][1];
+             }
+ 
++#ifdef __IOS__
++            static const s16 nativeHudButtons[] = {
++                HARKINIANPAD_HUD_BUTTON_C_LEFT,
++                HARKINIANPAD_HUD_BUTTON_C_DOWN,
++                HARKINIANPAD_HUD_BUTTON_C_RIGHT,
++            };
++            float nativeHudX;
++            float nativeHudY;
++            if (HarkinianPad_GetNativeHudButtonCenter(nativeHudButtons[temp - 1], OTRGetAspectRatio(), &nativeHudX,
++                                                       &nativeHudY)) {
++                ItemIconPos[temp - 1][0] = nativeHudX - ItemIconWidthFactor[temp - 1][0] * 0.5f;
++                ItemIconPos[temp - 1][1] = nativeHudY - ItemIconWidthFactor[temp - 1][0] * 0.5f;
++            }
++#endif
++
+             if (temp == 1) {
+                 gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cLeftButtonColor.r, cLeftButtonColor.g, cLeftButtonColor.b,
+-                                interfaceCtx->cLeftAlpha);
++                                HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cLeftAlpha));
+             } else if (temp == 2) {
+                 gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cDownButtonColor.r, cDownButtonColor.g, cDownButtonColor.b,
+-                                interfaceCtx->cDownAlpha);
++                                HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cDownAlpha));
+             } else {
+                 gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cRightButtonColor.r, cRightButtonColor.g, cRightButtonColor.b,
+-                                interfaceCtx->cRightAlpha);
++                                HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cRightAlpha));
+             }
+ 
+             OVERLAY_DISP = Gfx_TextureIA8(OVERLAY_DISP, ((u8*)gButtonBackgroundTex), 32, 32, ItemIconPos[temp - 1][0],
+@@ -4494,9 +4589,14 @@ void Interface_DrawItemIconTexture(PlayState* play, void* texture, s16 button) {
+                                         { DPAD_DOWN_X + X_Margins_DPad_Items, DPAD_DOWN_Y + Y_Margins_DPad_Items },
+                                         { DPAD_LEFT_X + X_Margins_DPad_Items, DPAD_LEFT_Y + Y_Margins_DPad_Items },
+                                         { DPAD_RIGHT_X + X_Margins_DPad_Items, DPAD_RIGHT_Y + Y_Margins_DPad_Items } };
+-    u16 ItemsSlotsAlpha[8] = { interfaceCtx->bAlpha,        interfaceCtx->cLeftAlpha,    interfaceCtx->cRightAlpha,
+-                               interfaceCtx->cDownAlpha,    interfaceCtx->dpadUpAlpha,   interfaceCtx->dpadDownAlpha,
+-                               interfaceCtx->dpadLeftAlpha, interfaceCtx->dpadRightAlpha };
++    u16 ItemsSlotsAlpha[8] = { HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->bAlpha),
++                               HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cLeftAlpha),
++                               HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cRightAlpha),
++                               HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cDownAlpha),
++                               interfaceCtx->dpadUpAlpha,
++                               interfaceCtx->dpadDownAlpha,
++                               interfaceCtx->dpadLeftAlpha,
++                               interfaceCtx->dpadRightAlpha };
+     s16 DPad_ItemsOffset[4][2] = {
+         { 7, -8 },         // Up
+         { 7, 24 },         // Down
+@@ -4656,13 +4756,37 @@ void Interface_DrawItemIconTexture(PlayState* play, void* texture, s16 button) {
+         ItemIconPos[3][1] = ItemIconPos_ori[3][1];
+     }
+ 
++    s16 nativeHudItemWidth = gItemIconWidth[button];
++    s16 nativeHudItemDD = gItemIconDD[button];
++#ifdef __IOS__
++    static const s16 nativeHudButtons[] = {
++        HARKINIANPAD_HUD_BUTTON_B,
++        HARKINIANPAD_HUD_BUTTON_C_LEFT,
++        HARKINIANPAD_HUD_BUTTON_C_DOWN,
++        HARKINIANPAD_HUD_BUTTON_C_RIGHT,
++    };
++    if (button >= 0 && button < 4) {
++        float nativeHudX;
++        float nativeHudY;
++        if (HarkinianPad_GetNativeHudButtonCenter(nativeHudButtons[button], OTRGetAspectRatio(), &nativeHudX,
++                                                   &nativeHudY)) {
++            const float nativeHudScale =
++                HarkinianPad_GetNativeHudButtonScale(nativeHudButtons[button], OTRGetAspectRatio());
++            nativeHudItemWidth = MAX(1, gItemIconWidth[button] * nativeHudScale);
++            nativeHudItemDD = (1 << 9) * 32 / nativeHudItemWidth;
++            ItemIconPos[button][0] = nativeHudX - nativeHudItemWidth * 0.5f;
++            ItemIconPos[button][1] = nativeHudY - nativeHudItemWidth * 0.5f;
++        }
++    }
++#endif
++
+     gDPLoadTextureBlock(OVERLAY_DISP++, texture, G_IM_FMT_RGBA, G_IM_SIZ_32b, 32, 32, 0, G_TX_NOMIRROR | G_TX_WRAP,
+                         G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOMASK, G_TX_NOLOD, G_TX_NOLOD);
+ 
+     gSPWideTextureRectangle(OVERLAY_DISP++, ItemIconPos[button][0] << 2, ItemIconPos[button][1] << 2,
+-                            (ItemIconPos[button][0] + gItemIconWidth[button]) << 2,
+-                            (ItemIconPos[button][1] + gItemIconWidth[button]) << 2, G_TX_RENDERTILE, 0, 0,
+-                            gItemIconDD[button] << 1, gItemIconDD[button] << 1);
++                            (ItemIconPos[button][0] + nativeHudItemWidth) << 2,
++                            (ItemIconPos[button][1] + nativeHudItemWidth) << 2, G_TX_RENDERTILE, 0, 0,
++                            nativeHudItemDD << 1, nativeHudItemDD << 1);
+ 
+     CLOSE_DISPS(play->state.gfxCtx);
+ }
+@@ -4905,6 +5029,28 @@ void Interface_DrawAmmoCount(PlayState* play, s16 button, s16 alpha) {
+         ItemIconPos[3][1] = ItemIconPos_ori[3][1];
+     }
+ 
++#ifdef __IOS__
++    static const s16 nativeHudButtons[] = {
++        HARKINIANPAD_HUD_BUTTON_B,
++        HARKINIANPAD_HUD_BUTTON_C_LEFT,
++        HARKINIANPAD_HUD_BUTTON_C_DOWN,
++        HARKINIANPAD_HUD_BUTTON_C_RIGHT,
++    };
++    static const s16 nativeButtonSizes[] = { 30, 27, 27, 27 };
++    if (button >= 0 && button < 4) {
++        float nativeHudX;
++        float nativeHudY;
++        if (HarkinianPad_GetNativeHudButtonCenter(nativeHudButtons[button], OTRGetAspectRatio(), &nativeHudX,
++                                                   &nativeHudY)) {
++            const float nativeHudScale =
++                HarkinianPad_GetNativeHudButtonScale(nativeHudButtons[button], OTRGetAspectRatio());
++            const float nativeButtonSize = nativeButtonSizes[button] * nativeHudScale;
++            ItemIconPos[button][0] = nativeHudX - nativeButtonSize * 0.5f + 1;
++            ItemIconPos[button][1] = nativeHudY - nativeButtonSize * 0.5f + MAX(12.0f, 17.0f * nativeHudScale);
++        }
++    }
++#endif
++
+     OPEN_DISPS(play->state.gfxCtx);
+ 
+     i = gSaveContext.equips.buttonItems[button];
+@@ -4962,11 +5108,16 @@ void Interface_DrawAmmoCount(PlayState* play, s16 button, s16 alpha) {
+ 
+ void Interface_DrawActionButton(PlayState* play, f32 x, f32 y) {
+     InterfaceContext* interfaceCtx = &play->interfaceCtx;
++    float nativeHudButtonScale = 1.0f;
++#ifdef __IOS__
++    nativeHudButtonScale =
++        HarkinianPad_GetNativeHudButtonScale(HARKINIANPAD_HUD_BUTTON_A, OTRGetAspectRatio());
++#endif
+ 
+     OPEN_DISPS(play->state.gfxCtx);
+ 
+     Matrix_Translate(-137.0f + x, 97.0f - y, XREG(18) / 10.0f, MTXMODE_NEW);
+-    Matrix_Scale(1.0f, 1.0f, 1.0f, MTXMODE_APPLY);
++    Matrix_Scale(nativeHudButtonScale, nativeHudButtonScale, nativeHudButtonScale, MTXMODE_APPLY);
+     Matrix_RotateX(interfaceCtx->unk_1F4 / 10000.0f, MTXMODE_APPLY);
+ 
+     gSPMatrix(OVERLAY_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_MODELVIEW | G_MTX_LOAD);
+@@ -5158,6 +5309,10 @@ void Interface_Draw(PlayState* play) {
+     s16 svar5;
+     s16 timerId;
+     bool fullUi = !CVarGetInteger(CVAR_ENHANCEMENT("MinimalUI"), 0) || !R_MINIMAP_DISABLED || play->pauseCtx.state != 0;
++#ifdef __IOS__
++    HarkinianPad_SetNativeHudTouchGameplayActive(gSaveContext.gameMode == GAMEMODE_NORMAL && fullUi &&
++                                                  pauseCtx->state == 0 && pauseCtx->debugState == 0);
++#endif
+     // #region SOH [NTSC]
+     s32 languageOffset = gSaveContext.language;
+ 
+@@ -5453,7 +5608,8 @@ void Interface_Draw(PlayState* play) {
+         }
+ 
+         gDPPipeSync(OVERLAY_DISP++);
+-        gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, interfaceCtx->bAlpha);
++        gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255,
++                        HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->bAlpha));
+         gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATERGBA_PRIM, G_CC_MODULATERGBA_PRIM);
+ 
+         if (!(interfaceCtx->unk_1FA)) {
+@@ -5473,7 +5629,7 @@ void Interface_Draw(PlayState* play) {
+                     gDPPipeSync(OVERLAY_DISP++);
+                     gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE,
+                                       0, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
+-                    Interface_DrawAmmoCount(play, 0, interfaceCtx->bAlpha);
++                    Interface_DrawAmmoCount(play, 0, HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->bAlpha));
+                 }
+             }
+         } else {
+@@ -5527,10 +5683,20 @@ void Interface_Draw(PlayState* play) {
+                 BbtnPosX = OTRGetRectDimensionFromRightEdge(R_B_LABEL_X(languageOffset) + X_Margins_BtnB_label);
+                 BbtnPosY = R_B_LABEL_Y(languageOffset) + Y_Margins_BtnB_label;
+             }
++#ifdef __IOS__
++            float nativeHudX;
++            float nativeHudY;
++            if (HarkinianPad_GetNativeHudButtonCenter(HARKINIANPAD_HUD_BUTTON_B, OTRGetAspectRatio(), &nativeHudX,
++                                                       &nativeHudY)) {
++                BbtnPosX = nativeHudX - 15 + PosX_adjust;
++                BbtnPosY = nativeHudY - 15 + PosY_adjust;
++            }
++#endif
+             gDPPipeSync(OVERLAY_DISP++);
+             gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
+                               PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
+-            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, interfaceCtx->bAlpha);
++            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255,
++                            HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->bAlpha));
+ 
+             gDPLoadTextureBlock_4b(OVERLAY_DISP++, interfaceCtx->doActionSegment[1], G_IM_FMT_IA, DO_ACTION_TEX_WIDTH(),
+                                    DO_ACTION_TEX_HEIGHT(), 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMIRROR | G_TX_WRAP,
+@@ -5546,39 +5712,42 @@ void Interface_Draw(PlayState* play) {
+ 
+         // C-Left Button Icon & Ammo Count
+         if (gSaveContext.equips.buttonItems[1] < 0xF0) {
+-            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, interfaceCtx->cLeftAlpha);
++            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255,
++                            HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cLeftAlpha));
+             gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATERGBA_PRIM, G_CC_MODULATERGBA_PRIM);
+             Interface_DrawItemIconTexture(play, gItemIcons[gSaveContext.equips.buttonItems[1]], 1);
+             gDPPipeSync(OVERLAY_DISP++);
+             gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
+                               PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
+-            Interface_DrawAmmoCount(play, 1, interfaceCtx->cLeftAlpha);
++            Interface_DrawAmmoCount(play, 1, HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cLeftAlpha));
+         }
+ 
+         gDPPipeSync(OVERLAY_DISP++);
+ 
+         // C-Down Button Icon & Ammo Count
+         if (gSaveContext.equips.buttonItems[2] < 0xF0) {
+-            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, interfaceCtx->cDownAlpha);
++            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255,
++                            HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cDownAlpha));
+             gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATERGBA_PRIM, G_CC_MODULATERGBA_PRIM);
+             Interface_DrawItemIconTexture(play, gItemIcons[gSaveContext.equips.buttonItems[2]], 2);
+             gDPPipeSync(OVERLAY_DISP++);
+             gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
+                               PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
+-            Interface_DrawAmmoCount(play, 2, interfaceCtx->cDownAlpha);
++            Interface_DrawAmmoCount(play, 2, HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cDownAlpha));
+         }
+ 
+         gDPPipeSync(OVERLAY_DISP++);
+ 
+         // C-Right Button Icon & Ammo Count
+         if (gSaveContext.equips.buttonItems[3] < 0xF0) {
+-            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, interfaceCtx->cRightAlpha);
++            gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255,
++                            HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cRightAlpha));
+             gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATERGBA_PRIM, G_CC_MODULATERGBA_PRIM);
+             Interface_DrawItemIconTexture(play, gItemIcons[gSaveContext.equips.buttonItems[3]], 3);
+             gDPPipeSync(OVERLAY_DISP++);
+             gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
+                               PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
+-            Interface_DrawAmmoCount(play, 3, interfaceCtx->cRightAlpha);
++            Interface_DrawAmmoCount(play, 3, HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->cRightAlpha));
+         }
+ 
+         if (CVarGetInteger(CVAR_ENHANCEMENT("DpadEquips"), 0) != 0) {
+@@ -5732,9 +5901,28 @@ void Interface_Draw(PlayState* play) {
+             rAIconY = rAIconY_ori;
+             rAIconX = rAIconX_ori;
+         }
++        float nativeHudButtonScale = 1.0f;
++#ifdef __IOS__
++        float nativeHudX;
++        float nativeHudY;
++        if (HarkinianPad_GetNativeHudButtonCenter(HARKINIANPAD_HUD_BUTTON_A, OTRGetAspectRatio(), &nativeHudX,
++                                                   &nativeHudY)) {
++            nativeHudButtonScale =
++                HarkinianPad_GetNativeHudButtonScale(HARKINIANPAD_HUD_BUTTON_A, OTRGetAspectRatio());
++            // Interface_DrawActionButton's legacy coordinate path places the
++            // centered action quad 23 points beyond PosX/PosY. Compensate for
++            // that fixed offset rather than treating PosX/PosY as the
++            // texture's scaled top-left corner.
++            PosX_BtnA = nativeHudX - 23.0f;
++            PosY_BtnA = nativeHudY - 23.0f;
++            rAIconX = PosX_BtnA;
++            rAIconY = 98.0f - PosY_BtnA;
 +        }
 +#endif
-         RunFrame();
-     }
- }
-diff --git a/soh/soh/Enhancements/FileSelectEnhancements.cpp b/soh/soh/Enhancements/FileSelectEnhancements.cpp
-index 7f26d02c1..9071ec217 100644
---- a/soh/soh/Enhancements/FileSelectEnhancements.cpp
-+++ b/soh/soh/Enhancements/FileSelectEnhancements.cpp
-@@ -42,21 +42,21 @@ std::array<std::string, LANGUAGE_MAX> RandomizerSettingsMenuText[RSM_MAX] = {
-     },
-     { // English
-       "No randomizer seed loaded.\nPlease generate one first"
--#if defined(__WIIU__) || defined(__SWITCH__)
-+#if defined(__WIIU__) || defined(__SWITCH__) || defined(__IOS__)
-       ".",
- #else
-       ",\nor drop a spoiler log on the game window.",
- #endif
-       // German
-       "Kein Randomizer Seed gefunden.\nBitte generiere zuerst einen"
--#if defined(__WIIU__) || defined(__SWITCH__)
-+#if defined(__WIIU__) || defined(__SWITCH__) || defined(__IOS__)
-       ".",
- #else
-       ",\noder ziehe ein Spoiler Log\nauf das Spielfenster.",
- #endif
-       // French
-       "Aucune Seed de Randomizer actuellement disponible.\nGénérez-en une dans les \"Randomizer Settings\""
--#if (defined(__WIIU__) || defined(__SWITCH__))
-+#if defined(__WIIU__) || defined(__SWITCH__) || defined(__IOS__)
-       "."
- #else
-       "\nou glissez un spoilerlog sur la fenêtre du jeu."
-diff --git a/soh/soh/Enhancements/bootcommands.c b/soh/soh/Enhancements/bootcommands.c
-index 3cda26a82..e67aa4101 100644
---- a/soh/soh/Enhancements/bootcommands.c
-+++ b/soh/soh/Enhancements/bootcommands.c
-@@ -12,5 +12,7 @@ void BootCommands_Init() {
-     CVarClear(CVAR_GENERAL("BetterDebugWarpScreenMQModeScene"));
- #if defined(__SWITCH__) || defined(__WIIU__)
-     CVarRegisterInteger(CVAR_IMGUI_CONTROLLER_NAV, 1); // always enable controller nav on switch/wii u
-+#elif defined(__IOS__)
-+    CVarSetInteger(CVAR_IMGUI_CONTROLLER_NAV, 1); // controller-first menus on iOS
- #endif
- }
-diff --git a/soh/soh/SohGui/Menu.cpp b/soh/soh/SohGui/Menu.cpp
-index 42227d7f9..a9a9aa02e 100644
---- a/soh/soh/SohGui/Menu.cpp
-+++ b/soh/soh/SohGui/Menu.cpp
-@@ -793,7 +793,7 @@ void Menu::DrawElement() {
-     options2.color = UIWidgets::Colors::Red;
-     options2.size = UIWidgets::Sizes::Inline;
-     options2.tooltip = "Reset"
--#ifdef __APPLE__
-+#if defined(__APPLE__) && !defined(__IOS__)
-                        " (Command-R)"
- #elif !defined(__SWITCH__) && !defined(__WIIU__)
-                        " (Ctrl+R)"
-@@ -802,9 +802,14 @@ void Menu::DrawElement() {
- #endif
-         ;
-     if (UIWidgets::Button(ICON_FA_UNDO, options2)) {
--        std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
--            Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
--            ->Dispatch("reset");
-+        SohGui::mModalWindow->RegisterPopup(
-+            "Reset Game", "Reset the game now? Any unsaved progress will be lost.", "Reset", "Cancel",
-+            []() {
-+                std::reinterpret_pointer_cast<Ship::ConsoleWindow>(
-+                    Ship::Context::GetRawInstance()->GetWindow()->GetGui()->GetGuiWindow("Console"))
-+                    ->Dispatch("reset");
-+            },
-+            nullptr);
-     }
-     ImGui::SameLine();
-     UIWidgets::ButtonOptions options = {};
-@@ -834,9 +839,13 @@ void Menu::DrawElement() {
+         gSPClearGeometryMode(OVERLAY_DISP++, G_CULL_BOTH);
+         gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATEIA_PRIM, G_CC_MODULATEIA_PRIM);
+-        gDPSetPrimColor(OVERLAY_DISP++, 0, 0, aButtonColor.r, aButtonColor.g, aButtonColor.b, interfaceCtx->aAlpha);
++        gDPSetPrimColor(OVERLAY_DISP++, 0, 0, aButtonColor.r, aButtonColor.g, aButtonColor.b,
++                        HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->aAlpha));
+         if (fullUi) {
+             Interface_DrawActionButton(play, PosX_BtnA, PosY_BtnA);
+         }
+@@ -5742,10 +5930,11 @@ void Interface_Draw(PlayState* play) {
+         gSPSetGeometryMode(OVERLAY_DISP++, G_CULL_BACK);
+         gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
+                           PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
+-        gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255, interfaceCtx->aAlpha);
++        gDPSetPrimColor(OVERLAY_DISP++, 0, 0, 255, 255, 255,
++                        HARKINIANPAD_TOUCH_ALPHA(interfaceCtx->aAlpha));
+         gDPSetEnvColor(OVERLAY_DISP++, 0, 0, 0, 0);
+         Matrix_Translate(-138.0f + rAIconX, rAIconY, WREG(46 + languageOffset) / 10.0f, MTXMODE_NEW);
+-        Matrix_Scale(1.0f, 1.0f, 1.0f, MTXMODE_APPLY);
++        Matrix_Scale(nativeHudButtonScale, nativeHudButtonScale, nativeHudButtonScale, MTXMODE_APPLY);
+         Matrix_RotateX(interfaceCtx->unk_1F4 / 10000.0f, MTXMODE_APPLY);
+         gSPMatrix(OVERLAY_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_MODELVIEW | G_MTX_LOAD);
+         gSPVertex(OVERLAY_DISP++, &interfaceCtx->actionVtx[4], 4, 0);
+diff --git a/soh/src/code/z_play.c b/soh/src/code/z_play.c
+index 729edd0e2..ef68365d8 100644
+--- a/soh/src/code/z_play.c
++++ b/soh/src/code/z_play.c
+@@ -14,6 +14,10 @@
+ #include "soh/SaveManager.h"
+ #include "soh/framebuffer_effects.h"
  
-     // Increase sidebar width on larger screens to accomodate people scaling their menus.
-     float sidebarWidth = 200 - style.ItemSpacing.x;
 +#ifdef __IOS__
-+    sidebarWidth = 240 - style.ItemSpacing.x;
-+#else
-     if (menuSize.x > 1600) {
-         sidebarWidth = menuSize.x * 0.15f;
-     }
++#include "ios/HarkinianPadTouchControls.h"
 +#endif
++
+ #include <time.h>
+ #include <assert.h>
  
-     const char* sidebarCvar = menuEntries.at(headerIndex).sidebarCvar;
+@@ -198,6 +202,10 @@ void Play_Destroy(GameState* thisx) {
+     PlayState* play = (PlayState*)thisx;
+     Player* player = GET_PLAYER(play);
  
-@@ -883,9 +892,15 @@ void Menu::DrawElement() {
-     std::string sectionMenuId = sectionIndex + " Settings";
-     size_t columns = sidebar->at(sectionIndex).columnCount;
-     size_t columnFuncs = sidebar->at(sectionIndex).columnWidgets.size();
 +#ifdef __IOS__
-+    if ((sectionWidth - style.ItemSpacing.x * columns) / columns < 720.0f) {
-+        columns = 1;
-+    }
-+#else
-     if (windowWidth < 800) {
-         columns = 1;
-     }
++    HarkinianPad_SetNativeHudTouchGameplayActive(0);
 +#endif
-     float columnWidth = (sectionWidth - style.ItemSpacing.x * columns) / columns;
-     bool useColumns = columns > 1;
-     if (!useColumns || (headerSearch && menuSearchText.length() > 0)) {
-@@ -933,7 +948,7 @@ void Menu::DrawElement() {
-             }
-             // for (auto& entryName : sidebar->at(sectionIndex).sidebarOrder) {
-             for (auto& entry : sidebar->at(sectionIndex).columnWidgets.at(i)) {
--                MenuDrawItem(entry, 90 / sidebar->at(sectionIndex).columnCount, menuThemeIndex);
-+                MenuDrawItem(entry, 90 / columns, menuThemeIndex);
-             }
-             //}
-             if (useColumns) {
-diff --git a/soh/soh/SohGui/ResolutionEditor.cpp b/soh/soh/SohGui/ResolutionEditor.cpp
-index fc7323e8b..5249a1634 100644
---- a/soh/soh/SohGui/ResolutionEditor.cpp
-+++ b/soh/soh/SohGui/ResolutionEditor.cpp
-@@ -232,7 +232,7 @@ void ResolutionCustomWidget(WidgetInfo& info) {
-     // Collapsible panel for additional settings
-     UIWidgets::PushStyleHeader(THEME_COLOR);
-     if (ImGui::CollapsingHeader("Additional Settings")) {
--#if defined(__SWITCH__) || defined(__WIIU__)
-+#if defined(__SWITCH__) || defined(__WIIU__) || defined(__IOS__)
-         // Disable aspect correction, stretching the framebuffer to fill the viewport.
-         // This option is only really needed on systems limited to 16:9 TV resolutions, such as consoles.
-         // The associated cvar is still functional on PC platforms if you want to use it though.
-diff --git a/soh/soh/SohGui/SohGui.cpp b/soh/soh/SohGui/SohGui.cpp
-index 0f5d6bda6..119795dd3 100644
---- a/soh/soh/SohGui/SohGui.cpp
-+++ b/soh/soh/SohGui/SohGui.cpp
-@@ -36,7 +36,7 @@ static const inline std::vector<std::pair<const char*, const char*>> audioBacken
- #if defined(__linux)
-     { "pulse", "PulseAudio" },
- #endif
--#ifdef __APPLE__
-+#if defined(__APPLE__) && !defined(__IOS__)
-     { "coreaudio", "Core Audio" },
- #endif
-     { "sdl", "SDL Audio" }
-diff --git a/soh/soh/SohGui/SohMenuSettings.cpp b/soh/soh/SohGui/SohMenuSettings.cpp
-index 643167726..786c17591 100644
---- a/soh/soh/SohGui/SohMenuSettings.cpp
-+++ b/soh/soh/SohGui/SohMenuSettings.cpp
-@@ -137,7 +137,7 @@ void SohMenu::AddMenuSettings() {
-                      .Tooltip("Changes the Theme of the Menu Widgets.")
-                      .ComboMap(menuThemeOptions)
-                      .DefaultIndex(Colors::LightBlue));
--#if not defined(__SWITCH__) and not defined(__WIIU__)
-+#if !defined(__SWITCH__) && !defined(__WIIU__) && !defined(__IOS__)
-     AddWidget(path, "Menu Controller Navigation", WIDGET_CVAR_CHECKBOX)
-         .CVar(CVAR_IMGUI_CONTROLLER_NAV)
-         .RaceDisable(false)
++
+     GameInteractor_ExecuteOnPlayDestroy();
+ 
+     play->state.gfxCtx->callback = NULL;
