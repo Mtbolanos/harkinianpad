@@ -69,7 +69,21 @@ jobs:
         run: python3 -m unittest discover -s tests -p '*_test.py'
 
       - name: Reproduce unsigned arm64 iPhoneOS app
-        run: scripts/build-ios.sh --device
+        run: |
+          set -o pipefail
+          scripts/build-ios.sh --device 2>&1 | tee -a build.log
+
+      # Build logs are not always downloadable; surface compiler and CMake errors as annotations.
+      - name: Report build errors
+        if: failure()
+        run: |
+          grep -E "error:|CMake Error|fatal error|Undefined symbol|ld: " build.log | sort -u | head -120 > errors.txt || true
+          [ -s errors.txt ] || tail -60 build.log > errors.txt
+          split -l 12 errors.txt chunk.
+          for f in chunk.*; do
+            msg="$(sed 's/%/%25/g' "$f" | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=Build errors ($f)::$msg"
+          done
 
       - name: Test pack import and selection boundaries
         run: scripts/test-mod-packs.sh
