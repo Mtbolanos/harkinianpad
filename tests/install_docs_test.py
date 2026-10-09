@@ -31,9 +31,9 @@ class InstallDocsTest(unittest.TestCase):
         self.assertEqual(match.group(1), "15.0")
         readme = (ROOT / "README.md").read_text()
         guide = (ROOT / "docs/BUILDING.md").read_text()
-        self.assertIn("Current source defaults to arm64 iOS/iPadOS 15+", readme)
+        self.assertIn("compila para arm64 con iOS/iPadOS 15 o superior", readme)
         self.assertIn("`DEPLOYMENT_TARGET=15.0`", guide)
-        self.assertIn("CI explicitly selects 14.0", guide)
+        self.assertIn("same 15.0 default", guide)
         self.assertNotIn("separate compile experiment", guide)
 
     def test_identity_and_distribution(self):
@@ -43,7 +43,7 @@ class InstallDocsTest(unittest.TestCase):
         filename = "HarkinianPad-{}-preview.{}-unsigned.ipa".format(version["version"], version["build"])
         self.assertIn(filename, readme)
         self.assertIn(filename, guide)
-        self.assertIn("Releases publish no IPA", readme)
+        self.assertIn("no publica apps compiladas", readme)
         self.assertNotIn("GitHub-hosted unsigned", readme)
         recipe = json.loads((ROOT / "padmint.json").read_text())
         self.assertFalse(recipe["publication"]["public_binaries"])

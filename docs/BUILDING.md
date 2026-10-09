@@ -9,9 +9,8 @@ components retain upstream ancestry in dedicated maintained branches. The
 
 - macOS with Xcode and its command-line tools. Current source defaults to
   `DEPLOYMENT_TARGET=15.0` for Xcode 27. Preserved earlier builds used an iOS 14
-  floor with Xcode 26.6, and CI explicitly selects 14.0 with its compatible
-  toolchain. That historical qualification does not establish iOS 14 support
-  for a new default build or new physical-device acceptance.
+  floor with Xcode 26.6. CI builds with the newest Xcode on its runner and the
+  same 15.0 default.
 - CMake 3.26 or newer and Python 3.9 or newer; [Homebrew](https://brew.sh) can install CMake
 - a legally acquired supported Ocarina of Time ROM for first-run extraction
 - for physical-device installation: an Apple ID configured in Xcode, a unique
@@ -21,9 +20,9 @@ ROMs and ROM-derived archives belong only in ignored local storage such as
 `ref/` or the app's Files-visible Documents folder. Never add them to Git or
 an app/IPA bundle.
 
-Install the current build prerequisites below. Port-resource generation now uses
-only Python; the iOS app still requires Xcode. See
-[portable resource generation](PORTABLE-RESOURCES.md) for that step and its limits.
+Install the current build prerequisites below. `scripts/generate-port-archive.sh`
+builds upstream's `soh-o2r-packer` for the Mac (a tools-only configure) to make the
+ROM-free `soh.o2r`; the iOS app requires Xcode.
 
 ```sh
 brew install cmake
@@ -111,9 +110,9 @@ Shipwright source version. The defaults are:
 
 | Field | Value |
 |---|---|
-| App version | `0.2.1` |
-| Build number | `7` |
-| Bundle identifier | `com.chrissotraidis.harkinianpad` |
+| App version | `0.3.0` |
+| Build number | `9` |
+| Bundle identifier | `cl.mtbolanoss.harkinianpad` |
 
 For a later preview, increment the build number without changing the app
 version:
@@ -169,7 +168,7 @@ scripts/package-ios.sh
 ```
 
 The default output is
-`artifacts/HarkinianPad-0.2.1-preview.8-unsigned.ipa`. It is deliberately
+`artifacts/HarkinianPad-0.3.0-preview.10-unsigned.ipa`. It is deliberately
 unsigned so AltStore Classic or another compatible personal-signing tool can
 re-sign it for the installer's device.
 

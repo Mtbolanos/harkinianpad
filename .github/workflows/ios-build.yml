@@ -17,7 +17,7 @@ permissions:
   contents: read
 
 env:
-  DEPLOYMENT_TARGET: "14.0"
+  DEPLOYMENT_TARGET: "15.0"
 
 jobs:
   repository-safety:
@@ -45,6 +45,12 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Select the newest installed Xcode
+        run: |
+          newest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)"
+          if [ -n "$newest" ]; then sudo xcode-select -s "$newest/Contents/Developer"; fi
+          xcodebuild -version
+
       - name: Install build tools and native test dependencies
         run: >-
           brew install cmake pkgconf libzip
@@ -63,7 +69,21 @@ jobs:
         run: python3 -m unittest discover -s tests -p '*_test.py'
 
       - name: Reproduce unsigned arm64 iPhoneOS app
-        run: scripts/build-ios.sh --device
+        run: |
+          set -o pipefail
+          scripts/build-ios.sh --device 2>&1 | tee -a build.log
+
+      # Build logs are not always downloadable; surface compiler and CMake errors as annotations.
+      - name: Report build errors
+        if: failure()
+        run: |
+          grep -E "error:|CMake Error|fatal error|Undefined symbol|ld: " build.log | sort -u | head -120 > errors.txt || true
+          [ -s errors.txt ] || tail -60 build.log > errors.txt
+          split -l 12 errors.txt chunk.
+          for f in chunk.*; do
+            msg="$(sed 's/%/%25/g' "$f" | awk '{printf "%s%%0A", $0}')"
+            echo "::error title=Build errors ($f)::$msg"
+          done
 
       - name: Test pack import and selection boundaries
         run: scripts/test-mod-packs.sh
@@ -76,5 +96,12 @@ jobs:
             exit 1
           fi
 
-      # Compile and package checks are not publication clearance. Full personal
-      # IPAs stay on the runner and must not become public-repository artifacts.
+      # Personal test build for the fork owner: a ROM-free unsigned IPA kept as a
+      # workflow artifact for 30 days, not a release.
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: HarkinianPad-unsigned-ipa
+          path: artifacts/*-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 30
