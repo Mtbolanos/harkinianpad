@@ -656,10 +656,23 @@ index eb93fea4..644bcc26 100644
 \ No newline at end of file
 +include(${CMAKE_IOS_TOOLCHAIN_FILE})
 diff --git a/include/fast/backends/gfx_metal.h b/include/fast/backends/gfx_metal.h
-index 1d452102..d769eb1b 100644
+index 1d452102..28255757 100644
 --- a/include/fast/backends/gfx_metal.h
 +++ b/include/fast/backends/gfx_metal.h
-@@ -29,6 +29,7 @@ class Device;
+@@ -12,6 +12,12 @@
+ 
+ #include <imgui_impl_sdl2.h>
+ #include <simd/simd.h>
++#include <atomic>
++#include <mutex>
++#include <set>
++#include <string>
++#include <thread>
++#include <vector>
+ 
+ static constexpr size_t kMaxVertexBufferPoolSize = 3;
+ static constexpr size_t METAL_MAX_MULTISAMPLE_SAMPLE_COUNT = 8;
+@@ -29,6 +35,7 @@ class Device;
  class Function;
  class Buffer;
  class RenderPipelineState;
@@ -667,7 +680,20 @@ index 1d452102..d769eb1b 100644
  class ComputePipelineState;
  class CommandQueue;
  class Viewport;
-@@ -128,7 +129,7 @@ struct CoordUniforms {
+@@ -66,8 +73,10 @@ struct ShaderProgramMetal {
+     bool usedTextures[SHADER_MAX_TEXTURES];
+     bool markedForDeletion = false;
+ 
+-    // hashed by msaa_level
+-    MTL::RenderPipelineState* pipeline_state_variants[9];
++    // hashed by msaa_level; created on first use for that level
++    MTL::RenderPipelineState* pipeline_state_variants[9] = {};
++    // Retained so other MSAA levels can be created lazily instead of all up front.
++    MTL::RenderPipelineDescriptor* pipeline_descriptor = nullptr;
+ };
+ 
+ struct TextureDataMetal {
+@@ -128,13 +137,19 @@ struct CoordUniforms {
  
  class GfxRenderingAPIMetal final : public GfxRenderingAPI {
    public:
@@ -676,7 +702,37 @@ index 1d452102..d769eb1b 100644
      const char* GetName() override;
      int GetMaxTextureSize() override;
      GfxClipParameters GetClipParameters() override;
-@@ -200,6 +201,8 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
+     void UnloadShader(ShaderProgram* oldPrg) override;
+     void LoadShader(ShaderProgram* newPrg) override;
+     ShaderProgram* CreateAndLoadNewShader(uint64_t shaderId0, uint64_t shaderId1) override;
++    // Compiles a shader program (MSL library, pipeline descriptor and the 1x pipeline). Thread-safe.
++    bool BuildShaderProgram(uint64_t shaderId0, uint64_t shaderId1, bool threePointFiltering,
++                            ShaderProgramMetal& out);
++    MTL::RenderPipelineState* GetPipelineState(ShaderProgramMetal* prg, uint32_t msaaLevel);
++    void StartShaderPrewarm();
++    void RecordShaderForPrewarm(uint64_t shaderId0, uint64_t shaderId1);
+     ShaderProgram* LookupShader(uint64_t shaderId0, uint64_t shaderId1) override;
+     void ShaderGetInfo(ShaderProgram* prg, uint8_t* numInputs, bool usedTextures[2]) override;
+     void ClearShaderCache() override;
+@@ -194,12 +209,26 @@ class GfxRenderingAPIMetal final : public GfxRenderingAPI {
+     std::unordered_map<std::pair<uint64_t, uint32_t>, struct ShaderProgramMetal, hash_pair_shader_ids>
+         mShaderProgramPool;
+ 
++    // Shader prewarm: Fast3D compiles a Metal shader the first time each combiner is drawn, which
++    // stutters the first time an area is seen. Shader ids are recorded to the app folder and compiled
++    // on a background thread at the next launch; finished programs are adopted on the render thread.
++    std::mutex mPrewarmMutex;
++    // gfx_metal_build_shader keeps static state; serialize the (cheap) source generation step.
++    std::mutex mShaderSourceMutex;
++    std::vector<std::pair<ShaderProgramMetal, bool>> mPrewarmReady; // program, built for three-point filtering
++    std::thread mPrewarmThread;
++    std::atomic_bool mPrewarmStop{ false };
++    std::set<std::pair<uint64_t, uint64_t>> mRecordedShaderIds;
++    std::string mShaderListPath;
++
+     std::vector<struct TextureDataMetal> mTextures;
+     std::vector<FramebufferMetal> mFramebuffers;
+     FrameUniforms mFrameUniforms;
      CoordUniforms mCoordUniforms;
      DrawUniforms mDrawUniforms;
      MTL::Buffer* mFrameUniformBuffer;
@@ -1150,14 +1206,27 @@ index 00000000..66b564ee
 +}
 +#endif
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
-index 00eaedbc..97cbb8ea 100644
+index 00eaedbc..c3da508a 100644
 --- a/src/fast/backends/gfx_metal.cpp
 +++ b/src/fast/backends/gfx_metal.cpp
-@@ -45,6 +45,18 @@
+@@ -13,6 +13,8 @@
+ #include <algorithm>
+ #include <unordered_map>
+ #include <queue>
++#include <tuple>
++#include <cstdio>
+ #include <time.h>
+ #include <math.h>
+ #include <cmath>
+@@ -45,6 +47,22 @@
  // MARK: - Helpers
  namespace Fast {
  
 +GfxRenderingAPIMetal::~GfxRenderingAPIMetal() {
++    mPrewarmStop = true;
++    if (mPrewarmThread.joinable()) {
++        mPrewarmThread.join();
++    }
 +    for (auto& depthTestStates : mDepthStencilStates) {
 +        for (auto& depthMaskStates : depthTestStates) {
 +            for (MTL::DepthStencilState* state : depthMaskStates) {
@@ -1172,7 +1241,229 @@ index 00eaedbc..97cbb8ea 100644
  static MTL::SamplerAddressMode gfx_cm_to_metal(uint32_t val) {
      switch (val) {
          case G_TX_NOMIRROR | G_TX_CLAMP:
-@@ -454,20 +466,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
+@@ -195,6 +213,8 @@ void GfxRenderingAPIMetal::Init() {
+ 
+     library->release();
+     autorelease_pool->release();
++
++    StartShaderPrewarm();
+ }
+ 
+ struct GfxClipParameters GfxRenderingAPIMetal::GetClipParameters() {
+@@ -214,7 +234,8 @@ void GfxRenderingAPIMetal::ClearShaderCache() {
+     }
+ }
+ 
+-struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shader_id0, uint64_t shader_id1) {
++bool GfxRenderingAPIMetal::BuildShaderProgram(uint64_t shader_id0, uint64_t shader_id1, bool threePointFiltering,
++                                              ShaderProgramMetal& prg) {
+     CCFeatures cc_features;
+     gfx_cc_get_features(shader_id0, shader_id1, &cc_features);
+ 
+@@ -222,16 +243,25 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
+     std::string buf;
+     NS::AutoreleasePool* autorelease_pool = NS::AutoreleasePool::alloc()->init();
+ 
+-    MTL::VertexDescriptor* vertex_descriptor =
+-        gfx_metal_build_shader(buf, numFloats, cc_features, mCurrentFilterMode == FILTER_THREE_POINT);
++    MTL::VertexDescriptor* vertex_descriptor = nullptr;
++    {
++        std::lock_guard<std::mutex> lock(mShaderSourceMutex);
++        vertex_descriptor = gfx_metal_build_shader(buf, numFloats, cc_features, threePointFiltering);
++        vertex_descriptor->retain();
++    }
+ 
+     NS::Error* error = nullptr;
+     MTL::Library* library =
+         mDevice->newLibrary(NS::String::string(buf.data(), NS::UTF8StringEncoding), nullptr, &error);
+ 
+-    if (error != nullptr)
++    if (library == nullptr || error != nullptr) {
+         SPDLOG_ERROR("Failed to compile shader library, error {}",
+-                     error->localizedDescription()->cString(NS::UTF8StringEncoding));
++                     error != nullptr ? error->localizedDescription()->cString(NS::UTF8StringEncoding) : "unknown");
++        if (library == nullptr) {
++            autorelease_pool->release();
++            return false;
++        }
++    }
+ 
+     MTL::RenderPipelineDescriptor* pipeline_descriptor = MTL::RenderPipelineDescriptor::alloc()->init();
+     MTL::Function* vertexFunc = library->newFunction(NS::String::string("vertexShader", NS::UTF8StringEncoding));
+@@ -240,6 +270,7 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
+     pipeline_descriptor->setVertexFunction(vertexFunc);
+     pipeline_descriptor->setFragmentFunction(fragmentFunc);
+     pipeline_descriptor->setVertexDescriptor(vertex_descriptor);
++    vertex_descriptor->release();
+ 
+     pipeline_descriptor->colorAttachments()->object(0)->setPixelFormat(mSrgbMode ? MTL::PixelFormatBGRA8Unorm_sRGB
+                                                                                  : MTL::PixelFormatBGRA8Unorm);
+@@ -259,50 +290,132 @@ struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shad
+         pipeline_descriptor->colorAttachments()->object(0)->setWriteMask(MTL::ColorWriteMaskAll);
+     }
+ 
+-    struct ShaderProgramMetal* prg = &mShaderProgramPool[std::make_pair(shader_id0, shader_id1)];
+-    prg->shader_id0 = shader_id0;
+-    prg->shader_id1 = shader_id1;
+-    prg->usedTextures[0] = cc_features.usedTextures[0];
+-    prg->usedTextures[1] = cc_features.usedTextures[1];
+-    prg->usedTextures[2] = cc_features.used_masks[0];
+-    prg->usedTextures[3] = cc_features.used_masks[1];
+-    prg->usedTextures[4] = cc_features.used_blend[0];
+-    prg->usedTextures[5] = cc_features.used_blend[1];
+-    prg->numInputs = cc_features.numInputs;
+-    prg->numFloats = numFloats;
+-
+-    // Prepoluate pipeline state cache with program and available msaa levels
+-    for (int i = 0; i < ARRAY_COUNT(mMsaaNumQualityLevels); i++) {
+-        if (mMsaaNumQualityLevels[i] == 1) {
+-            int msaa_level = i + 1;
+-            pipeline_descriptor->setSampleCount(msaa_level);
+-            MTL::RenderPipelineState* pipeline_state = mDevice->newRenderPipelineState(pipeline_descriptor, &error);
+-
+-            if (!pipeline_state || error != nullptr) {
+-                // Pipeline State creation could fail if we haven't properly set up our pipeline descriptor.
+-                // If the Metal API validation is enabled, we can find out more information about what
+-                // went wrong.  (Metal API validation is enabled by default when a debug build is run
+-                // from Xcode)
+-                SPDLOG_ERROR("Failed to create pipeline state, error {}",
+-                             error->localizedDescription()->cString(NS::UTF8StringEncoding));
+-            }
+-
+-            prg->pipeline_state_variants[msaa_level] = pipeline_state;
+-        }
++    prg.shader_id0 = shader_id0;
++    prg.shader_id1 = shader_id1;
++    prg.usedTextures[0] = cc_features.usedTextures[0];
++    prg.usedTextures[1] = cc_features.usedTextures[1];
++    prg.usedTextures[2] = cc_features.used_masks[0];
++    prg.usedTextures[3] = cc_features.used_masks[1];
++    prg.usedTextures[4] = cc_features.used_blend[0];
++    prg.usedTextures[5] = cc_features.used_blend[1];
++    prg.numInputs = cc_features.numInputs;
++    prg.numFloats = numFloats;
++    prg.pipeline_descriptor = pipeline_descriptor;
++    for (auto& variant : prg.pipeline_state_variants) {
++        variant = nullptr;
+     }
+ 
+-    LoadShader((struct ShaderProgram*)prg);
++    // Only the 1x pipeline is built here; other MSAA levels are built when first drawn with.
++    // Building every supported level up front multiplied the first-use stutter.
++    GetPipelineState(&prg, 1);
+ 
+     vertexFunc->release();
+     fragmentFunc->release();
+     library->release();
+-    pipeline_descriptor->release();
+     autorelease_pool->release();
++    return true;
++}
++
++MTL::RenderPipelineState* GfxRenderingAPIMetal::GetPipelineState(ShaderProgramMetal* prg, uint32_t msaaLevel) {
++    if (msaaLevel == 0 || msaaLevel >= (uint32_t)ARRAY_COUNT(prg->pipeline_state_variants)) {
++        msaaLevel = 1;
++    }
++    if (prg->pipeline_state_variants[msaaLevel] != nullptr || prg->pipeline_descriptor == nullptr) {
++        return prg->pipeline_state_variants[msaaLevel];
++    }
++    NS::Error* error = nullptr;
++    prg->pipeline_descriptor->setSampleCount(msaaLevel);
++    MTL::RenderPipelineState* pipeline_state = mDevice->newRenderPipelineState(prg->pipeline_descriptor, &error);
++    if (!pipeline_state || error != nullptr) {
++        SPDLOG_ERROR("Failed to create pipeline state, error {}",
++                     error != nullptr ? error->localizedDescription()->cString(NS::UTF8StringEncoding) : "unknown");
++    }
++    prg->pipeline_state_variants[msaaLevel] = pipeline_state;
++    return pipeline_state;
++}
++
++void GfxRenderingAPIMetal::RecordShaderForPrewarm(uint64_t shader_id0, uint64_t shader_id1) {
++#ifdef __IOS__
++    if (mShaderListPath.empty() || !mRecordedShaderIds.insert({ shader_id0, shader_id1 }).second) {
++        return;
++    }
++    if (FILE* file = fopen(mShaderListPath.c_str(), "a")) {
++        fprintf(file, "%llu %llu %d\n", (unsigned long long)shader_id0, (unsigned long long)shader_id1,
++                mCurrentFilterMode == FILTER_THREE_POINT ? 1 : 0);
++        fclose(file);
++    }
++#endif
++}
++
++void GfxRenderingAPIMetal::StartShaderPrewarm() {
++#ifdef __IOS__
++    mShaderListPath = Ship::Context::GetPathRelativeToAppDirectory("metal-shaders.txt");
++    std::vector<std::tuple<uint64_t, uint64_t, bool>> pending;
++    if (FILE* file = fopen(mShaderListPath.c_str(), "r")) {
++        unsigned long long id0 = 0, id1 = 0;
++        int threePoint = 0;
++        while (fscanf(file, "%llu %llu %d", &id0, &id1, &threePoint) == 3) {
++            if (mRecordedShaderIds.insert({ id0, id1 }).second) {
++                pending.emplace_back(id0, id1, threePoint != 0);
++            }
++        }
++        fclose(file);
++    }
++    if (pending.empty()) {
++        return;
++    }
++    SPDLOG_INFO("Prewarming {} Metal shaders", pending.size());
++    mPrewarmThread = std::thread([this, pending = std::move(pending)]() {
++        for (const auto& [id0, id1, threePoint] : pending) {
++            if (mPrewarmStop.load()) {
++                return;
++            }
++            ShaderProgramMetal prg;
++            if (BuildShaderProgram(id0, id1, threePoint, prg)) {
++                std::lock_guard<std::mutex> lock(mPrewarmMutex);
++                mPrewarmReady.emplace_back(prg, threePoint);
++            }
++        }
++    });
++#endif
++}
+ 
++struct ShaderProgram* GfxRenderingAPIMetal::CreateAndLoadNewShader(uint64_t shader_id0, uint64_t shader_id1) {
++    struct ShaderProgramMetal* prg = &mShaderProgramPool[std::make_pair(shader_id0, shader_id1)];
++    if (!BuildShaderProgram(shader_id0, shader_id1, mCurrentFilterMode == FILTER_THREE_POINT, *prg)) {
++        prg->shader_id0 = shader_id0;
++        prg->shader_id1 = shader_id1;
++    }
++    RecordShaderForPrewarm(shader_id0, shader_id1);
++    LoadShader((struct ShaderProgram*)prg);
+     return (struct ShaderProgram*)prg;
+ }
+ 
+ struct ShaderProgram* GfxRenderingAPIMetal::LookupShader(uint64_t shader_id0, uint64_t shader_id1) {
++#ifdef __IOS__
++    // Adopt programs the prewarm thread has finished, without ever waiting on it.
++    std::unique_lock<std::mutex> prewarmLock(mPrewarmMutex, std::try_to_lock);
++    if (prewarmLock.owns_lock() && !mPrewarmReady.empty()) {
++        for (auto& [ready, threePoint] : mPrewarmReady) {
++            auto key = std::make_pair(ready.shader_id0, (uint32_t)ready.shader_id1);
++            if (threePoint == (mCurrentFilterMode == FILTER_THREE_POINT) &&
++                mShaderProgramPool.find(key) == mShaderProgramPool.end()) {
++                mShaderProgramPool.emplace(key, ready);
++            } else {
++                for (auto* variant : ready.pipeline_state_variants) {
++                    if (variant != nullptr) {
++                        variant->release();
++                    }
++                }
++                ready.pipeline_descriptor->release();
++            }
++        }
++        mPrewarmReady.clear();
++    }
++    if (prewarmLock.owns_lock()) {
++        prewarmLock.unlock();
++    }
++#endif
+     auto it = mShaderProgramPool.find(std::make_pair(shader_id0, shader_id1));
+ 
+     if (it == mShaderProgramPool.end()) {
+@@ -454,20 +567,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
      auto& current_framebuffer = mFramebuffers[mCurrentFramebuffer];
  
      if (current_framebuffer.mLastDepthTest != mCurrentDepthTest ||
@@ -1206,11 +1497,29 @@ index 00eaedbc..97cbb8ea 100644
      }
  
      if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
+@@ -541,8 +657,7 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
+     if (current_framebuffer.mLastShaderProgram != mShaderProgram) {
+         current_framebuffer.mLastShaderProgram = mShaderProgram;
+ 
+-        MTL::RenderPipelineState* pipeline_state =
+-            mShaderProgram->pipeline_state_variants[current_framebuffer.mMsaaLevel];
++        MTL::RenderPipelineState* pipeline_state = GetPipelineState(mShaderProgram, current_framebuffer.mMsaaLevel);
+         current_framebuffer.mCommandEncoder->setRenderPipelineState(pipeline_state);
+     }
+ 
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index 15c5415f..b7682314 100644
+index 15c5415f..bd2be1b4 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
-@@ -11,6 +11,11 @@
+@@ -1,6 +1,7 @@
+ #if defined(ENABLE_OPENGL) || defined(__APPLE__)
+ 
+ #include <stdio.h>
++#include <algorithm>
+ 
+ #include "fast/Fast3dWindow.h"
+ 
+@@ -11,6 +12,11 @@
  #endif
  
  #include "ship/Context.h"
@@ -1222,7 +1531,7 @@ index 15c5415f..b7682314 100644
  #include "ship/config/ConsoleVariable.h"
  #include "ship/controller/controldeck/ControlDeck.h"
  #include "ship/window/FileDropMgr.h"
-@@ -53,6 +58,25 @@ LONG_PTR SDL_WndProc;
+@@ -53,6 +59,25 @@ LONG_PTR SDL_WndProc;
  #endif
  
  namespace Fast {
@@ -1248,7 +1557,7 @@ index 15c5415f..b7682314 100644
  const SDL_Scancode lus_to_sdl_table[] = {
      SDL_SCANCODE_UNKNOWN,
      SDL_SCANCODE_ESCAPE,
-@@ -215,6 +239,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
+@@ -215,6 +240,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
  }
  
  void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
@@ -1265,7 +1574,7 @@ index 15c5415f..b7682314 100644
      if (mFullScreen == on) {
          return;
      }
-@@ -235,7 +269,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -235,7 +270,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
          }
      }
  
@@ -1274,7 +1583,7 @@ index 15c5415f..b7682314 100644
      // Implement fullscreening with native macOS APIs
      if (on != isNativeMacOSFullscreenActive(mWnd)) {
          toggleNativeMacOSFullscreen(mWnd);
-@@ -273,7 +307,16 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -273,7 +308,22 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
      }
  }
  
@@ -1285,13 +1594,19 @@ index 15c5415f..b7682314 100644
  void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
 +#ifdef __IOS__
 +    // SDL reports UIScreen.maximumFramesPerSecond, which is not always what Core Animation delivers.
-+    *refresh_rate = static_cast<uint32_t>(LUS_IOSEffectiveMaxRefreshRate());
++    uint32_t rate = static_cast<uint32_t>(LUS_IOSEffectiveMaxRefreshRate());
++    // At native resolution an iPhone GPU cannot hold 120 FPS (about 80 on an A18 Pro), and pacing the
++    // game for a rate it cannot reach slows the game and desyncs audio. Cap it to an even 60 there.
++    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0)) {
++        rate = std::min<uint32_t>(rate, 60);
++    }
++    *refresh_rate = rate;
 +    return;
 +#endif
      int display_in_use = SDL_GetWindowDisplayIndex(mWnd);
  
      SDL_DisplayMode mode;
-@@ -374,7 +417,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -374,7 +424,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
  
  #ifdef __IOS__
@@ -1303,7 +1618,7 @@ index 15c5415f..b7682314 100644
  #else
      Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
  #endif
-@@ -434,6 +480,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -434,6 +487,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
@@ -1317,7 +1632,7 @@ index 15c5415f..b7682314 100644
          window_impl.Metal = { mWnd, mRenderer };
          window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
      }
-@@ -626,9 +679,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -626,9 +686,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
              OnKeyup(event.key.keysym.scancode);
              break;
          case SDL_MOUSEBUTTONDOWN:
@@ -1337,7 +1652,7 @@ index 15c5415f..b7682314 100644
              OnMouseButtonUp(event.button.button - 1);
              break;
          case SDL_MOUSEWHEEL:
-@@ -657,6 +720,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -657,6 +727,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
          case SDL_DROPFILE:
              Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
              break;
@@ -1374,7 +1689,7 @@ index 15c5415f..b7682314 100644
          case SDL_QUIT:
              Close();
              break;
-@@ -669,12 +762,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -669,12 +769,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
      while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {
          HandleSingleEvent(event);
      }
@@ -1389,7 +1704,7 @@ index 15c5415f..b7682314 100644
      auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
      if (mFullScreen != nextFullscreenState) {
          mFullScreen = nextFullscreenState;
-@@ -686,7 +779,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -686,7 +786,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
  }
  
  bool GfxWindowBackendSDL2::IsFrameReady() {
@@ -1401,7 +1716,7 @@ index 15c5415f..b7682314 100644
  }
  
  static uint64_t qpc_to_100ns(uint64_t qpc) {
-@@ -774,7 +871,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
+@@ -774,7 +878,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
  }
  
  bool GfxWindowBackendSDL2::CanDisableVsync() {
@@ -2092,7 +2407,7 @@ index eaea3cd7..5bc888a9 100644
              const float textWidth = GetStringWidth(overlay.Value.c_str());
              const float textOffset = 40.0f;
 diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
-index 1f9279bd..3794547f 100644
+index 1f9279bd..aa5018c1 100644
 --- a/src/ship/window/gui/Gui.cpp
 +++ b/src/ship/window/gui/Gui.cpp
 @@ -7,6 +7,14 @@
@@ -2142,7 +2457,7 @@ index 1f9279bd..3794547f 100644
      for (auto& windowIter : mGuiWindows) {
          windowIter.second->Update();
          windowIter.second->Draw();
-@@ -284,11 +306,89 @@ void Gui::HandleMouseCapture() {
+@@ -284,11 +306,113 @@ void Gui::HandleMouseCapture() {
      }
  }
  
@@ -2161,60 +2476,84 @@ index 1f9279bd..3794547f 100644
 +static void IOSTouchScroll() {
 +    ImGuiContext& g = *GImGui;
 +    ImGuiIO& io = g.IO;
-+    static ImGuiWindow* sTarget = nullptr;
++    static ImGuiWindow* sTargetY = nullptr;
++    static ImGuiWindow* sTargetX = nullptr;
 +    static ImVec2 sStart;
-+    static bool sScrolling = false;
-+    static float sVelocity = 0.0f;
++    static int sAxis = -1; // -1 undecided, 0 horizontal, 1 vertical
++    static ImVec2 sVelocity;
 +    constexpr float kStartThreshold = 10.0f;
 +
-+    auto findScrollable = [&g](ImGuiWindow* window) -> ImGuiWindow* {
++    auto findScrollable = [](ImGuiWindow* window, int axis) -> ImGuiWindow* {
 +        for (; window != nullptr; window = window->ParentWindow) {
-+            if (window->ScrollMax.y > 0.0f && !(window->Flags & ImGuiWindowFlags_NoScrollWithMouse)) {
++            if (window->ScrollMax[axis] > 0.0f && !(window->Flags & ImGuiWindowFlags_NoScrollWithMouse)) {
 +                return window;
 +            }
 +        }
 +        return nullptr;
 +    };
++    // NewFrame() resets Active until each window's Begin() runs again; WasActive is last frame's state.
 +    auto windowAlive = [&g](ImGuiWindow* window) {
-+        return window != nullptr && g.Windows.contains(window) && window->Active;
++        return window != nullptr && g.Windows.contains(window) && window->WasActive;
++    };
++    auto scrollBy = [](ImGuiWindow* window, int axis, float delta) {
++        if (axis == 1) {
++            ImGui::SetScrollY(window, window->Scroll.y + delta);
++        } else {
++            ImGui::SetScrollX(window, window->Scroll.x + delta);
++        }
 +    };
 +
 +    if (io.MouseSource == ImGuiMouseSource_TouchScreen && io.MouseClicked[0]) {
-+        sTarget = findScrollable(g.HoveredWindow);
++        sTargetY = findScrollable(g.HoveredWindow, 1);
++        sTargetX = findScrollable(g.HoveredWindow, 0);
 +        sStart = io.MousePos;
-+        sScrolling = false;
-+        sVelocity = 0.0f;
++        sAxis = -1;
++        sVelocity = ImVec2(0.0f, 0.0f);
 +    }
 +
 +    if (io.MouseDown[0] && io.MouseSource == ImGuiMouseSource_TouchScreen) {
-+        if (!windowAlive(sTarget)) {
-+            sTarget = nullptr;
-+            return;
-+        }
 +        const float dx = io.MousePos.x - sStart.x;
 +        const float dy = io.MousePos.y - sStart.y;
-+        if (!sScrolling && std::fabs(dy) > kStartThreshold && std::fabs(dy) > std::fabs(dx)) {
-+            sScrolling = true;
++        if (sAxis < 0) {
++            // Vertical drags scroll; horizontal drags only scroll windows that scroll sideways (the
++            // header bar), so sliders in ordinary panels keep receiving horizontal drags.
++            if (std::fabs(dy) > kStartThreshold && std::fabs(dy) >= std::fabs(dx) && windowAlive(sTargetY)) {
++                sAxis = 1;
++            } else if (std::fabs(dx) > kStartThreshold && std::fabs(dx) > std::fabs(dy) && windowAlive(sTargetX)) {
++                sAxis = 0;
++            }
 +        }
-+        if (sScrolling) {
++        if (sAxis >= 0) {
++            ImGuiWindow* target = sAxis == 1 ? sTargetY : sTargetX;
++            if (!windowAlive(target)) {
++                sAxis = -1;
++                return;
++            }
++            const float delta = sAxis == 1 ? -io.MouseDelta.y : -io.MouseDelta.x;
 +            ImGui::ClearActiveID();
-+            ImGui::SetScrollY(sTarget, sTarget->Scroll.y - io.MouseDelta.y);
++            scrollBy(target, sAxis, delta);
 +            if (io.DeltaTime > 0.0f) {
-+                sVelocity = sVelocity * 0.6f + (-io.MouseDelta.y / io.DeltaTime) * 0.4f;
++                float& velocity = sAxis == 1 ? sVelocity.y : sVelocity.x;
++                velocity = velocity * 0.6f + (delta / io.DeltaTime) * 0.4f;
 +            }
 +        }
 +        return;
 +    }
 +
 +    // Released: keep gliding briefly, then stop.
-+    if (sScrolling && windowAlive(sTarget) && std::fabs(sVelocity) > 30.0f) {
-+        ImGui::SetScrollY(sTarget, sTarget->Scroll.y + sVelocity * io.DeltaTime);
-+        sVelocity *= std::pow(0.05f, io.DeltaTime);
-+        return;
++    if (sAxis >= 0) {
++        ImGuiWindow* target = sAxis == 1 ? sTargetY : sTargetX;
++        float& velocity = sAxis == 1 ? sVelocity.y : sVelocity.x;
++        if (windowAlive(target) && std::fabs(velocity) > 30.0f) {
++            scrollBy(target, sAxis, velocity * io.DeltaTime);
++            velocity *= std::pow(0.05f, io.DeltaTime);
++            return;
++        }
 +    }
-+    sScrolling = false;
-+    sTarget = nullptr;
-+    sVelocity = 0.0f;
++    sAxis = -1;
++    sTargetX = nullptr;
++    sTargetY = nullptr;
++    sVelocity = ImVec2(0.0f, 0.0f);
 +}
 +#endif
 +
