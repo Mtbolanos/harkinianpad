@@ -789,7 +789,7 @@ index ac61dd36..b440c059 100644
  };
  } // namespace Ship
 diff --git a/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h b/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h
-index 33f9a664..1587889c 100644
+index 33f9a664..f5356b9a 100644
 --- a/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h
 +++ b/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h
 @@ -1,90 +1,48 @@
@@ -882,7 +882,7 @@ index 33f9a664..1587889c 100644
 -    /** @brief Re-scans all connected SDL gamepads and rebuilds the internal maps. */
 -    void RefreshConnectedSDLGamepads();
 +    void HandlePhysicalDeviceRemap(int32_t sdlJoystickInstanceId);
-+    void RefreshConnectedSDLGamepads(const char* reason);
++    void RefreshConnectedSDLGamepads(const char* reason = "refresh");
 +    bool ReconcileIfNeeded(const char* reason);
  
    private:
