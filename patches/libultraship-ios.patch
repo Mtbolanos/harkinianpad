@@ -970,6 +970,111 @@ index 66bf70d0..311089f1 100644
 +if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
 +    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_display.mm)
 +endif()
+diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
+index 237a502a..1094a280 100644
+--- a/src/fast/Fast3dGui.cpp
++++ b/src/fast/Fast3dGui.cpp
+@@ -12,6 +12,7 @@
+ 
+ #ifdef __APPLE__
+ #include <SDL_hints.h>
++#include <SDL_render.h>
+ #include <SDL_video.h>
+ #include <imgui_impl_metal.h>
+ #include <imgui_impl_sdl2.h>
+@@ -195,6 +196,45 @@ void Fast3dGui::ImGuiBackendShutdown() {
+     }
+ }
+ 
++#ifdef __IOS__
++// Pixels per UIKit point of the Metal drawable (UIScreen.nativeScale with ALLOW_HIGHDPI, else 1).
++// ImGui's SDL2 backend asks SDL_GL_GetDrawableSize, which reports points for Metal views on UIKit.
++static float IOSDrawableScale(const GuiWindowInitData& impl, float* scaleY = nullptr) {
++    int windowWidth = 0, windowHeight = 0, pixelWidth = 0, pixelHeight = 0;
++    SDL_GetWindowSize(static_cast<SDL_Window*>(impl.Metal.Window), &windowWidth, &windowHeight);
++    if (impl.Metal.Renderer == nullptr ||
++        SDL_GetRendererOutputSize(impl.Metal.Renderer, &pixelWidth, &pixelHeight) != 0 || windowWidth <= 0 ||
++        windowHeight <= 0 || pixelWidth <= 0 || pixelHeight <= 0) {
++        if (scaleY != nullptr) {
++            *scaleY = 1.0f;
++        }
++        return 1.0f;
++    }
++    if (scaleY != nullptr) {
++        *scaleY = (float)pixelHeight / (float)windowHeight;
++    }
++    return (float)pixelWidth / (float)windowWidth;
++}
++
++// Rasterize the font atlas at the drawable's pixel density so menus are sharp, while ImGui keeps
++// laying out in points. Rebuilds the atlas only when fonts are added or the density changes.
++static void IOSApplyFontDensity(float scale) {
++    ImGuiIO& io = ImGui::GetIO();
++    bool changed = false;
++    for (ImFontConfig& config : io.Fonts->Sources) {
++        if (config.RasterizerDensity != scale) {
++            config.RasterizerDensity = scale;
++            changed = true;
++        }
++    }
++    if (changed && io.Fonts->IsBuilt()) {
++        io.Fonts->ClearTexData();
++        io.Fonts->Build();
++        ImGui_ImplMetal_DestroyFontsTexture();
++    }
++}
++#endif
++
+ void Fast3dGui::ImGuiBackendNewFrame() {
+     switch (mImpl.Backend) {
+ #ifdef ENABLE_OPENGL
+@@ -211,6 +251,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
+ 
+ #ifdef __APPLE__
+         case WindowBackend::FAST3D_SDL_METAL: {
++#ifdef __IOS__
++            IOSApplyFontDensity(IOSDrawableScale(mImpl));
++#endif
+             GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
+             api->NewFrame();
+             break;
+@@ -226,6 +269,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
+         case WindowBackend::FAST3D_SDL_OPENGL:
+         case WindowBackend::FAST3D_SDL_METAL:
+             ImGui_ImplSDL2_NewFrame();
++#ifdef __IOS__
++            if (mImpl.Backend == WindowBackend::FAST3D_SDL_METAL) {
++                float scaleY = 1.0f;
++                const float scaleX = IOSDrawableScale(mImpl, &scaleY);
++                ImGui::GetIO().DisplayFramebufferScale = ImVec2(scaleX, scaleY);
++            }
++#endif
+             break;
+ #ifdef ENABLE_DX11
+         case WindowBackend::FAST3D_DXGI_DX11:
+@@ -320,8 +370,20 @@ void Fast3dGui::CalculateGameViewport() {
+     mainPos.y -= mTemporaryWindowPos.y;
+     ImVec2 size = ImGui::GetContentRegionAvail();
+     const auto interpreter = mInterpreter.lock().get();
+-    interpreter->mCurDimensions.width = (uint32_t)(size.x * mInterpreter.lock()->mCurDimensions.internal_mul);
+-    interpreter->mCurDimensions.height = (uint32_t)(size.y * mInterpreter.lock()->mCurDimensions.internal_mul);
++    float nativeScaleX = 1.0f;
++    float nativeScaleY = 1.0f;
++#ifdef __IOS__
++    // Opt-in: render the game at the panel's pixel resolution. The viewport is measured in UIKit
++    // points (a third of the pixels on 3x iPhones), so scale it by the drawable's density.
++    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0)) {
++        nativeScaleX = ImGui::GetIO().DisplayFramebufferScale.x;
++        nativeScaleY = ImGui::GetIO().DisplayFramebufferScale.y;
++    }
++#endif
++    interpreter->mCurDimensions.width =
++        (uint32_t)(size.x * nativeScaleX * mInterpreter.lock()->mCurDimensions.internal_mul);
++    interpreter->mCurDimensions.height =
++        (uint32_t)(size.y * nativeScaleY * mInterpreter.lock()->mCurDimensions.internal_mul);
+     interpreter->mGameWindowViewport.x = (int16_t)mainPos.x;
+     interpreter->mGameWindowViewport.y = (int16_t)mainPos.y;
+     interpreter->mGameWindowViewport.width = (int16_t)size.x;
 diff --git a/src/fast/Fast3dWindow.cpp b/src/fast/Fast3dWindow.cpp
 index 2b77a5f2..dc8efeff 100644
 --- a/src/fast/Fast3dWindow.cpp
@@ -1102,7 +1207,7 @@ index 00eaedbc..97cbb8ea 100644
  
      if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index 15c5415f..56feabcc 100644
+index 15c5415f..b7682314 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
 @@ -11,6 +11,11 @@
@@ -1186,7 +1291,19 @@ index 15c5415f..56feabcc 100644
      int display_in_use = SDL_GetWindowDisplayIndex(mWnd);
  
      SDL_DisplayMode mode;
-@@ -434,6 +477,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -374,7 +417,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+     int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
+ 
+ #ifdef __IOS__
+-    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN;
++    // ALLOW_HIGHDPI makes SDL's Metal view use UIScreen.nativeScale, so the drawable (and the UI
++    // drawn into it) is at the panel's pixel resolution instead of UIKit points (a third of it on 3x
++    // iPhones). The game's own render resolution is chosen separately in Fast3dGui.
++    Uint32 flags = SDL_WINDOW_BORDERLESS | SDL_WINDOW_SHOWN | SDL_WINDOW_ALLOW_HIGHDPI;
+ #else
+     Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+ #endif
+@@ -434,6 +480,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
@@ -1200,24 +1317,7 @@ index 15c5415f..56feabcc 100644
          window_impl.Metal = { mWnd, mRenderer };
          window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
      }
-@@ -525,6 +575,16 @@ void GfxWindowBackendSDL2::SetMouseCallbacks(bool (*onMouseButtonDown)(int btn),
- }
- 
- void GfxWindowBackendSDL2::GetDimensions(uint32_t* width, uint32_t* height, int32_t* posX, int32_t* posY) {
-+#ifdef __IOS__
-+    // Opt-in: render the game at the Metal drawable's pixel size instead of UIKit points
-+    // (points are native / UIScreen.nativeScale, e.g. a third of the panel on 3x iPhones).
-+    if (mRenderer != nullptr &&
-+        Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0)) {
-+        SDL_GetRendererOutputSize(mRenderer, static_cast<int*>((void*)width), static_cast<int*>((void*)height));
-+        SDL_GetWindowPosition(mWnd, static_cast<int*>(posX), static_cast<int*>(posY));
-+        return;
-+    }
-+#endif
- #ifdef __APPLE__
-     SDL_GetWindowSize(mWnd, static_cast<int*>((void*)width), static_cast<int*>((void*)height));
- #else
-@@ -626,9 +686,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -626,9 +679,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
              OnKeyup(event.key.keysym.scancode);
              break;
          case SDL_MOUSEBUTTONDOWN:
@@ -1237,7 +1337,7 @@ index 15c5415f..56feabcc 100644
              OnMouseButtonUp(event.button.button - 1);
              break;
          case SDL_MOUSEWHEEL:
-@@ -657,6 +727,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -657,6 +720,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
          case SDL_DROPFILE:
              Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
              break;
@@ -1274,7 +1374,7 @@ index 15c5415f..56feabcc 100644
          case SDL_QUIT:
              Close();
              break;
-@@ -669,12 +769,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -669,12 +762,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
      while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {
          HandleSingleEvent(event);
      }
@@ -1289,7 +1389,7 @@ index 15c5415f..56feabcc 100644
      auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
      if (mFullScreen != nextFullscreenState) {
          mFullScreen = nextFullscreenState;
-@@ -686,7 +786,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -686,7 +779,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
  }
  
  bool GfxWindowBackendSDL2::IsFrameReady() {
@@ -1301,7 +1401,7 @@ index 15c5415f..56feabcc 100644
  }
  
  static uint64_t qpc_to_100ns(uint64_t qpc) {
-@@ -774,7 +878,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
+@@ -774,7 +871,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
  }
  
  bool GfxWindowBackendSDL2::CanDisableVsync() {
@@ -1992,22 +2092,25 @@ index eaea3cd7..5bc888a9 100644
              const float textWidth = GetStringWidth(overlay.Value.c_str());
              const float textOffset = 40.0f;
 diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
-index 1f9279bd..936c2100 100644
+index 1f9279bd..3794547f 100644
 --- a/src/ship/window/gui/Gui.cpp
 +++ b/src/ship/window/gui/Gui.cpp
-@@ -7,6 +7,11 @@
+@@ -7,6 +7,14 @@
  #include <string>
  #include <vector>
  
 +#ifdef __IOS__
 +#include <SDL2/SDL.h>
++#include <imgui_internal.h>
++#include <algorithm>
++#include <cmath>
 +extern "C" void ShipIOS_SetTouchControlsMenuVisible(int visible);
 +#endif
 +
  #include "ship/config/Config.h"
  #include "ship/Context.h"
  #include "ship/config/ConsoleVariable.h"
-@@ -79,9 +84,19 @@ void Gui::Init() {
+@@ -79,9 +87,19 @@ void Gui::Init() {
                                                            &iconsConfig, sIconsRanges);
  
  #if defined(__ANDROID__)
@@ -2028,7 +2131,7 @@ index 1f9279bd..936c2100 100644
  #endif
  
      mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
-@@ -262,6 +277,10 @@ void Gui::DrawMenu() {
+@@ -262,6 +280,10 @@ void Gui::DrawMenu() {
          GetMenu()->Draw();
      }
  
@@ -2039,3 +2142,93 @@ index 1f9279bd..936c2100 100644
      for (auto& windowIter : mGuiWindows) {
          windowIter.second->Update();
          windowIter.second->Draw();
+@@ -284,11 +306,89 @@ void Gui::HandleMouseCapture() {
+     }
+ }
+ 
++#ifdef __IOS__
++// Touch-friendly menus: ImGui only scrolls with a wheel or the scrollbar, which is hard to hit on
++// a phone. A mostly vertical finger drag that starts inside a scrollable window scrolls it (with a
++// little inertia after release) and cancels the press, so it never activates the widget it began on.
++// Horizontal drags are left alone so sliders keep working.
++static void IOSApplyTouchStyle() {
++    ImGuiStyle& style = ImGui::GetStyle();
++    style.TouchExtraPadding = ImVec2(4.0f, 4.0f);
++    style.ScrollbarSize = std::max(style.ScrollbarSize, 18.0f);
++    style.GrabMinSize = std::max(style.GrabMinSize, 18.0f);
++}
++
++static void IOSTouchScroll() {
++    ImGuiContext& g = *GImGui;
++    ImGuiIO& io = g.IO;
++    static ImGuiWindow* sTarget = nullptr;
++    static ImVec2 sStart;
++    static bool sScrolling = false;
++    static float sVelocity = 0.0f;
++    constexpr float kStartThreshold = 10.0f;
++
++    auto findScrollable = [&g](ImGuiWindow* window) -> ImGuiWindow* {
++        for (; window != nullptr; window = window->ParentWindow) {
++            if (window->ScrollMax.y > 0.0f && !(window->Flags & ImGuiWindowFlags_NoScrollWithMouse)) {
++                return window;
++            }
++        }
++        return nullptr;
++    };
++    auto windowAlive = [&g](ImGuiWindow* window) {
++        return window != nullptr && g.Windows.contains(window) && window->Active;
++    };
++
++    if (io.MouseSource == ImGuiMouseSource_TouchScreen && io.MouseClicked[0]) {
++        sTarget = findScrollable(g.HoveredWindow);
++        sStart = io.MousePos;
++        sScrolling = false;
++        sVelocity = 0.0f;
++    }
++
++    if (io.MouseDown[0] && io.MouseSource == ImGuiMouseSource_TouchScreen) {
++        if (!windowAlive(sTarget)) {
++            sTarget = nullptr;
++            return;
++        }
++        const float dx = io.MousePos.x - sStart.x;
++        const float dy = io.MousePos.y - sStart.y;
++        if (!sScrolling && std::fabs(dy) > kStartThreshold && std::fabs(dy) > std::fabs(dx)) {
++            sScrolling = true;
++        }
++        if (sScrolling) {
++            ImGui::ClearActiveID();
++            ImGui::SetScrollY(sTarget, sTarget->Scroll.y - io.MouseDelta.y);
++            if (io.DeltaTime > 0.0f) {
++                sVelocity = sVelocity * 0.6f + (-io.MouseDelta.y / io.DeltaTime) * 0.4f;
++            }
++        }
++        return;
++    }
++
++    // Released: keep gliding briefly, then stop.
++    if (sScrolling && windowAlive(sTarget) && std::fabs(sVelocity) > 30.0f) {
++        ImGui::SetScrollY(sTarget, sTarget->Scroll.y + sVelocity * io.DeltaTime);
++        sVelocity *= std::pow(0.05f, io.DeltaTime);
++        return;
++    }
++    sScrolling = false;
++    sTarget = nullptr;
++    sVelocity = 0.0f;
++}
++#endif
++
+ void Gui::StartFrame() {
+     HandleMouseCapture();
+     ImGuiBackendNewFrame();
+     ImGuiWMNewFrame();
++#ifdef __IOS__
++    IOSApplyTouchStyle();
++#endif
+     ImGui::NewFrame();
++#ifdef __IOS__
++    IOSTouchScroll();
++#endif
+ }
+ 
+ void Gui::EndFrame() {
