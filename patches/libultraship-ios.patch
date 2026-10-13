@@ -1069,7 +1069,7 @@ index 66bf70d0..c96c63f6 100644
 +    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_external_display.mm)
 +endif()
 diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
-index 237a502a..30cf577c 100644
+index 237a502a..de2b2e2b 100644
 --- a/src/fast/Fast3dGui.cpp
 +++ b/src/fast/Fast3dGui.cpp
 @@ -12,6 +12,7 @@
@@ -1080,17 +1080,18 @@ index 237a502a..30cf577c 100644
  #include <SDL_video.h>
  #include <imgui_impl_metal.h>
  #include <imgui_impl_sdl2.h>
-@@ -22,6 +23,9 @@
+@@ -22,6 +23,10 @@
  
  #if defined(__ANDROID__) || defined(__IOS__)
  #include "ship/port/mobile/MobileImpl.h"
 +#ifdef __IOS__
 +#include "ship/window/gui/IOSTouchScroll.h"
++extern "C" int LUS_IOSIsExtendedToExternalDisplay(void);
 +#endif
  #endif
  
  #ifdef ENABLE_OPENGL
-@@ -69,7 +73,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
+@@ -69,7 +74,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
      switch (mImpl.Backend) {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
@@ -1105,7 +1106,7 @@ index 237a502a..30cf577c 100644
  #if defined(__ANDROID__) || defined(__IOS__)
              Ship::Mobile::ImGuiProcessEvent(ImGui::GetIO().WantTextInput);
  #endif
-@@ -195,6 +206,45 @@ void Fast3dGui::ImGuiBackendShutdown() {
+@@ -195,6 +207,47 @@ void Fast3dGui::ImGuiBackendShutdown() {
      }
  }
  
@@ -1143,7 +1144,9 @@ index 237a502a..30cf577c 100644
 +    if (changed && io.Fonts->IsBuilt()) {
 +        io.Fonts->ClearTexData();
 +        io.Fonts->Build();
-+        ImGui_ImplMetal_DestroyFontsTexture();
++        // The Metal backend only creates the font texture together with its device objects, so drop them
++        // all; ImGui_ImplMetal_NewFrame recreates them (with the new atlas) on the next frame.
++        ImGui_ImplMetal_DestroyDeviceObjects();
 +    }
 +}
 +#endif
@@ -1151,7 +1154,7 @@ index 237a502a..30cf577c 100644
  void Fast3dGui::ImGuiBackendNewFrame() {
      switch (mImpl.Backend) {
  #ifdef ENABLE_OPENGL
-@@ -211,6 +261,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
+@@ -211,6 +264,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
  
  #ifdef __APPLE__
          case WindowBackend::FAST3D_SDL_METAL: {
@@ -1161,7 +1164,7 @@ index 237a502a..30cf577c 100644
              GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
              api->NewFrame();
              break;
-@@ -226,6 +279,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
+@@ -226,6 +282,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
              ImGui_ImplSDL2_NewFrame();
@@ -1175,7 +1178,7 @@ index 237a502a..30cf577c 100644
              break;
  #ifdef ENABLE_DX11
          case WindowBackend::FAST3D_DXGI_DX11:
-@@ -320,8 +380,20 @@ void Fast3dGui::CalculateGameViewport() {
+@@ -320,8 +383,22 @@ void Fast3dGui::CalculateGameViewport() {
      mainPos.y -= mTemporaryWindowPos.y;
      ImVec2 size = ImGui::GetContentRegionAvail();
      const auto interpreter = mInterpreter.lock().get();
@@ -1184,9 +1187,11 @@ index 237a502a..30cf577c 100644
 +    float nativeScaleX = 1.0f;
 +    float nativeScaleY = 1.0f;
 +#ifdef __IOS__
-+    // Opt-in: render the game at the panel's pixel resolution. The viewport is measured in UIKit
-+    // points (a third of the pixels on 3x iPhones), so scale it by the drawable's density.
-+    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0)) {
++    // Render the game at the screen's pixel resolution: opt-in on the device, always on an external display
++    // (whose drawable already matches its output mode). The viewport is measured in UIKit points, so scale
++    // it by the drawable's density.
++    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0) ||
++        LUS_IOSIsExtendedToExternalDisplay()) {
 +        nativeScaleX = ImGui::GetIO().DisplayFramebufferScale.x;
 +        nativeScaleY = ImGui::GetIO().DisplayFramebufferScale.y;
 +    }
@@ -1283,10 +1288,10 @@ index 00000000..f08f86c5
 +#endif
 diff --git a/src/fast/backends/gfx_ios_external_display.mm b/src/fast/backends/gfx_ios_external_display.mm
 new file mode 100644
-index 00000000..44f487ed
+index 00000000..6d6958be
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_external_display.mm
-@@ -0,0 +1,298 @@
+@@ -0,0 +1,312 @@
 +#ifdef __IOS__
 +// External display support for iOS/iPadOS ("Extend to External Display").
 +//
@@ -1363,14 +1368,28 @@ index 00000000..44f487ed
 +    return nil;
 +}
 +
-+static void ApplyMetalScale(UIScreen* screen) {
++// Pixels per point of a scene's screen. External displays can report scaled point bounds (an iPad on a 4K TV
++// says 3008x1692 points at 2x) while the real output mode is 3840x2160, so derive it from the mode.
++static CGFloat PixelScale(UIWindowScene* scene) {
++    UIScreen* screen = scene.screen;
++    const CGSize bounds = scene.coordinateSpace.bounds.size;
++    const CGSize mode = screen.currentMode.size;
++    const CGFloat boundsLong = MAX(bounds.width, bounds.height);
++    const CGFloat modeLong = MAX(mode.width, mode.height);
++    if (screen != UIScreen.mainScreen && boundsLong > 0.0 && modeLong > 0.0) {
++        return modeLong / boundsLong;
++    }
++    return screen.nativeScale;
++}
++
++static void ApplyMetalScale(UIWindowScene* scene) {
 +    UIView* metalView = FindMetalView(sSDLWindow);
 +    if (metalView == nil) {
 +        ExtLog(@"metal view not found");
 +        return;
 +    }
 +    // SDL fixes contentsScale at creation from the device screen; the external display has its own scale.
-+    metalView.layer.contentsScale = screen.nativeScale;
++    metalView.layer.contentsScale = PixelScale(scene);
 +    [metalView setNeedsLayout];
 +    [sSDLWindow setNeedsLayout];
 +    [sSDLWindow layoutIfNeeded];
@@ -1463,14 +1482,14 @@ index 00000000..44f487ed
 +        sSDLWindow.windowScene = sExternalScene;
 +        sSDLWindow.frame = sExternalScene.coordinateSpace.bounds;
 +        sSDLWindow.hidden = NO;
-+        ApplyMetalScale(sExternalScene.screen);
++        ApplyMetalScale(sExternalScene);
 +        [sDeviceHostWindow makeKeyAndVisible];
 +        ExtLog(@"surface -> external (%@)", DescribeScene(sExternalScene));
 +    } else {
 +        UIWindowScene* deviceScene = sDeviceScene ?: sSDLWindow.windowScene;
 +        sSDLWindow.windowScene = deviceScene;
 +        sSDLWindow.frame = deviceScene.coordinateSpace.bounds;
-+        ApplyMetalScale(deviceScene.screen);
++        ApplyMetalScale(deviceScene);
 +        sDeviceHostWindow.hidden = YES;
 +        [sSDLWindow makeKeyAndVisible];
 +        if (sExternalScene != nil) {
