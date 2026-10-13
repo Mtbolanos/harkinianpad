@@ -1173,13 +1173,14 @@ index 2b77a5f2..dc8efeff 100644
  
 diff --git a/src/fast/backends/gfx_ios_display.mm b/src/fast/backends/gfx_ios_display.mm
 new file mode 100644
-index 00000000..66b564ee
+index 00000000..2342c360
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_display.mm
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,54 @@
 +#ifdef __IOS__
 +#import <Foundation/Foundation.h>
 +#import <UIKit/UIKit.h>
++#import <GameController/GameController.h>
 +
 +// Refresh rate that Core Animation will actually deliver to this process.
 +//
@@ -1207,6 +1208,27 @@ index 00000000..66b564ee
 +        return (int)MIN(panel, (NSInteger)60);
 +    }
 +    return (int)panel;
++}
++
++// Since iPadOS 26 the system can turn game controller input into UIKit events (it navigates the iPadOS
++// interface with the sticks). Those reach SDL as arrow/Return/Space key presses, so one controller also
++// drives the keyboard mappings. GCEventInteraction declares that this view hierarchy reads controllers
++// through the Game Controller framework (as SDL does), which makes gamepad events go only there.
++extern "C" void LUS_IOSInstallGameControllerInteraction(void* uiWindow) {
++    if (@available(iOS 18.0, *)) {
++        UIView* root = (__bridge UIView*)uiWindow;
++        if (root == nil) {
++            return;
++        }
++        for (id<UIInteraction> interaction in root.interactions) {
++            if ([interaction isKindOfClass:[GCEventInteraction class]]) {
++                return;
++            }
++        }
++        GCEventInteraction* interaction = [[GCEventInteraction alloc] init];
++        interaction.handledEventTypes = GCUIEventTypeGamepad;
++        [root addInteraction:interaction];
++    }
 +}
 +#endif
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
@@ -1267,7 +1289,7 @@ index 00eaedbc..97cbb8ea 100644
  
      if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index 15c5415f..b7682314 100644
+index 15c5415f..706e3f75 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
 @@ -11,6 +11,11 @@
@@ -1282,7 +1304,18 @@ index 15c5415f..b7682314 100644
  #include "ship/config/ConsoleVariable.h"
  #include "ship/controller/controldeck/ControlDeck.h"
  #include "ship/window/FileDropMgr.h"
-@@ -53,6 +58,25 @@ LONG_PTR SDL_WndProc;
+@@ -39,6 +44,10 @@
+ #include "ship/window/gui/Gui.h"
+ #include "fast/Fast3dGui.h"
+ 
++#ifdef __IOS__
++#include <SDL_syswm.h>
++#endif
++
+ #ifdef _WIN32
+ #include <WTypesbase.h>
+ #include <Windows.h>
+@@ -53,6 +62,25 @@ LONG_PTR SDL_WndProc;
  #endif
  
  namespace Fast {
@@ -1308,7 +1341,7 @@ index 15c5415f..b7682314 100644
  const SDL_Scancode lus_to_sdl_table[] = {
      SDL_SCANCODE_UNKNOWN,
      SDL_SCANCODE_ESCAPE,
-@@ -215,6 +239,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
+@@ -215,6 +243,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
  }
  
  void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
@@ -1325,7 +1358,7 @@ index 15c5415f..b7682314 100644
      if (mFullScreen == on) {
          return;
      }
-@@ -235,7 +269,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -235,7 +273,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
          }
      }
  
@@ -1334,12 +1367,13 @@ index 15c5415f..b7682314 100644
      // Implement fullscreening with native macOS APIs
      if (on != isNativeMacOSFullscreenActive(mWnd)) {
          toggleNativeMacOSFullscreen(mWnd);
-@@ -273,7 +307,16 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -273,7 +311,17 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
      }
  }
  
 +#ifdef __IOS__
 +extern "C" int LUS_IOSEffectiveMaxRefreshRate(void);
++extern "C" void LUS_IOSInstallGameControllerInteraction(void* uiWindow);
 +#endif
 +
  void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
@@ -1351,7 +1385,7 @@ index 15c5415f..b7682314 100644
      int display_in_use = SDL_GetWindowDisplayIndex(mWnd);
  
      SDL_DisplayMode mode;
-@@ -374,7 +417,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -374,7 +422,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
  
  #ifdef __IOS__
@@ -1363,7 +1397,24 @@ index 15c5415f..b7682314 100644
  #else
      Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
  #endif
-@@ -434,6 +480,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -386,6 +437,16 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+     }
+ 
+     mWnd = SDL_CreateWindow(title, posX, posY, mWindowWidth, mWindowHeight, flags);
++#ifdef __IOS__
++    // Keep controller input on the Game Controller path only (no duplicate key presses on iPadOS 26+).
++    if (mWnd != nullptr) {
++        SDL_SysWMinfo iosWmInfo;
++        SDL_VERSION(&iosWmInfo.version);
++        if (SDL_GetWindowWMInfo(mWnd, &iosWmInfo) && iosWmInfo.subsystem == SDL_SYSWM_UIKIT) {
++            LUS_IOSInstallGameControllerInteraction((void*)iosWmInfo.info.uikit.window);
++        }
++    }
++#endif
+ #ifdef _WIN32
+     // Get Windows window handle and use it to subclass the window procedure.
+     // Needed to circumvent SDLs DPI scaling problems under windows (original does only scale *sometimes*).
+@@ -434,6 +495,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
@@ -1377,7 +1428,7 @@ index 15c5415f..b7682314 100644
          window_impl.Metal = { mWnd, mRenderer };
          window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
      }
-@@ -626,9 +679,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -626,9 +694,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
              OnKeyup(event.key.keysym.scancode);
              break;
          case SDL_MOUSEBUTTONDOWN:
@@ -1397,7 +1448,7 @@ index 15c5415f..b7682314 100644
              OnMouseButtonUp(event.button.button - 1);
              break;
          case SDL_MOUSEWHEEL:
-@@ -657,6 +720,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -657,6 +735,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
          case SDL_DROPFILE:
              Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
              break;
@@ -1434,7 +1485,7 @@ index 15c5415f..b7682314 100644
          case SDL_QUIT:
              Close();
              break;
-@@ -669,12 +762,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -669,12 +777,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
      while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {
          HandleSingleEvent(event);
      }
@@ -1449,7 +1500,7 @@ index 15c5415f..b7682314 100644
      auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
      if (mFullScreen != nextFullscreenState) {
          mFullScreen = nextFullscreenState;
-@@ -686,7 +779,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -686,7 +794,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
  }
  
  bool GfxWindowBackendSDL2::IsFrameReady() {
@@ -1461,7 +1512,7 @@ index 15c5415f..b7682314 100644
  }
  
  static uint64_t qpc_to_100ns(uint64_t qpc) {
-@@ -774,7 +871,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
+@@ -774,7 +886,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
  }
  
  bool GfxWindowBackendSDL2::CanDisableVsync() {
