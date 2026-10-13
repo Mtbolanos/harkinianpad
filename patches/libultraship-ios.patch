@@ -1267,10 +1267,10 @@ index 00000000..cf00ca6e
 +#endif
 diff --git a/src/fast/backends/gfx_ios_external_display.mm b/src/fast/backends/gfx_ios_external_display.mm
 new file mode 100644
-index 00000000..2d287725
+index 00000000..972547ec
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_external_display.mm
-@@ -0,0 +1,337 @@
+@@ -0,0 +1,280 @@
 +#ifdef __IOS__
 +// External display support for iOS/iPadOS ("Extend to External Display").
 +//
@@ -1290,38 +1290,6 @@ index 00000000..2d287725
 +
 +// Implemented by each port (touch controls); called when the touch host window changes.
 +extern "C" void ShipIOS_TouchHostChanged(void);
-+
-+// TEMPORARY external display log (development branch only): Documents/external-display.txt.
-+static dispatch_queue_t sLogQueue;
-+static NSFileHandle* sLogFile;
-+static void ExtLog(NSString* format, ...) NS_FORMAT_FUNCTION(1, 2);
-+static void ExtLog(NSString* format, ...) {
-+    static dispatch_once_t once;
-+    dispatch_once(&once, ^{
-+        sLogQueue = dispatch_queue_create("ios.external-display-log", DISPATCH_QUEUE_SERIAL);
-+        NSString* dir = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
-+        NSString* path = [dir stringByAppendingPathComponent:@"external-display.txt"];
-+        [[NSFileManager defaultManager] createFileAtPath:path contents:nil attributes:nil];
-+        sLogFile = [NSFileHandle fileHandleForWritingAtPath:path];
-+    });
-+    va_list args;
-+    va_start(args, format);
-+    NSString* message = [[NSString alloc] initWithFormat:format arguments:args];
-+    va_end(args);
-+    const double t = CACurrentMediaTime();
-+    dispatch_async(sLogQueue, ^{
-+        [sLogFile writeData:[[NSString stringWithFormat:@"%10.3f %@\n", t, message]
-+                                dataUsingEncoding:NSUTF8StringEncoding]];
-+    });
-+}
-+
-+static NSString* DescribeScene(UIWindowScene* scene) {
-+    UIScreen* screen = scene.screen;
-+    return [NSString stringWithFormat:@"role=%@ bounds=%@ scale=%.2f nativeScale=%.2f maxFPS=%ld mode=%@",
-+                                      scene.session.role, NSStringFromCGRect(scene.coordinateSpace.bounds),
-+                                      screen.scale, screen.nativeScale, (long)screen.maximumFramesPerSecond,
-+                                      NSStringFromCGSize(screen.currentMode.size)];
-+}
 +
 +// ---------------------------------------------------------------------------------------------------
 +// State
@@ -1365,7 +1333,6 @@ index 00000000..2d287725
 +static void ApplyMetalScale(UIWindowScene* scene) {
 +    UIView* metalView = FindMetalView(sSDLWindow);
 +    if (metalView == nil) {
-+        ExtLog(@"metal view not found");
 +        return;
 +    }
 +    // SDL fixes contentsScale at creation from the device screen; the external display has its own scale.
@@ -1373,8 +1340,6 @@ index 00000000..2d287725
 +    [metalView setNeedsLayout];
 +    [sSDLWindow setNeedsLayout];
 +    [sSDLWindow layoutIfNeeded];
-+    ExtLog(@"metal drawable now %@ (contentsScale %.2f)",
-+           NSStringFromCGSize(((CAMetalLayer*)metalView.layer).drawableSize), metalView.layer.contentsScale);
 +}
 +
 +@interface LUSExternalDisplayViewController : UIViewController
@@ -1464,7 +1429,6 @@ index 00000000..2d287725
 +        sSDLWindow.hidden = NO;
 +        ApplyMetalScale(sExternalScene);
 +        [sDeviceHostWindow makeKeyAndVisible];
-+        ExtLog(@"surface -> external (%@)", DescribeScene(sExternalScene));
 +    } else {
 +        UIWindowScene* deviceScene = sDeviceScene ?: sSDLWindow.windowScene;
 +        sSDLWindow.windowScene = deviceScene;
@@ -1478,8 +1442,6 @@ index 00000000..2d287725
 +            }
 +            sExternalPlaceholder.hidden = !ExtendEnabled();
 +        }
-+        ExtLog(@"surface -> device (menu=%d pad=%d extend=%d external=%d)", sMenuVisible, sMenuFromPad,
-+               ExtendEnabled(), sExternalScene != nil);
 +    }
 +    sSurfaceOnExternal = toExternal;
 +    ShipIOS_TouchHostChanged();
@@ -1532,7 +1494,6 @@ index 00000000..2d287725
 +        return;
 +    }
 +    sExternalScene = (UIWindowScene*)scene;
-+    ExtLog(@"external scene connected: %@", DescribeScene(sExternalScene));
 +    Update();
 +}
 +
@@ -1540,7 +1501,6 @@ index 00000000..2d287725
 +    if (scene != sExternalScene) {
 +        return;
 +    }
-+    ExtLog(@"external scene disconnected");
 +    sExternalScene = nil;
 +    sExternalPlaceholder.hidden = YES;
 +    sExternalPlaceholder = nil;
@@ -1554,23 +1514,6 @@ index 00000000..2d287725
 +extern "C" void LUS_IOSExternalDisplayAttachWindow(void* uiWindow) {
 +    sSDLWindow = (__bridge UIWindow*)uiWindow;
 +    sDeviceScene = sSDLWindow.windowScene;
-+    UIApplication* app = UIApplication.sharedApplication;
-+    ExtLog(@"attached SDL window; device scene: %@; connected scenes=%lu", DescribeScene(sDeviceScene),
-+           (unsigned long)app.connectedScenes.count);
-+    for (UIScene* scene in app.connectedScenes) {
-+        ExtLog(@"  scene %@ state=%ld", scene.session.role, (long)scene.activationState);
-+    }
-+    ExtLog(@"UIScreen.screens=%lu", (unsigned long)UIScreen.screens.count);
-+    [NSNotificationCenter.defaultCenter addObserverForName:UIScreenDidConnectNotification object:nil queue:nil
-+                                                usingBlock:^(NSNotification* note) {
-+                                                    ExtLog(@"UIScreenDidConnect (screens=%lu)",
-+                                                           (unsigned long)UIScreen.screens.count);
-+                                                }];
-+    [NSNotificationCenter.defaultCenter addObserverForName:UIScreenDidDisconnectNotification object:nil queue:nil
-+                                                usingBlock:^(NSNotification* note) {
-+                                                    ExtLog(@"UIScreenDidDisconnect (screens=%lu)",
-+                                                           (unsigned long)UIScreen.screens.count);
-+                                                }];
 +    Update();
 +}
 +

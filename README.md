@@ -31,10 +31,12 @@ render en Metal y controles táctiles personalizables. Hice este fork porque que
   20 FPS en iPhone.
 - **Aprovechar la resolución real de la pantalla.** El juego y los menús se
   dibujaban a un tercio de la resolución del panel.
+- **Jugar en la tele.** Conectar el iPhone o iPad a una pantalla externa y usar
+  el dispositivo como control.
 
 ## Qué cambia respecto del original
 
-| | HarkinianPad 0.2.1 (original) | Este fork 0.3.1 |
+| | HarkinianPad 0.2.1 (original) | Este fork 0.4.0 |
 |---|---|---|
 | Upstream | `develop` (9.2.3 + 301 commits) | **Ship of Harkinian 9.3.0 "Dewey"** |
 | Fuentes | Forks propios de Shipwright y libultraship | Upstream oficial fijado por commit + parches revisables en [`patches/`](patches/) |
@@ -44,6 +46,9 @@ render en Metal y controles táctiles personalizables. Hice este fork porque que
 | Resolución | Juego y menús a 1/3 del panel | Menús siempre nítidos. Opción **Native Screen Resolution** para el juego |
 | Tope de FPS | — | **Lock at 60 FPS**, opcional, para jugar a resolución nativa con 60 estables |
 | Menús táctiles | Sin scroll con el dedo | Scroll con un dedo e inercia, sin mover sliders por accidente. Tooltips con el dedo quieto |
+| Pantalla externa | Solo duplicaba la pantalla | **Extend to External Display**: el juego a pantalla completa en la tele o el monitor (USB-C/HDMI o AirPlay) y el dispositivo como control |
+| Controles táctiles | Se ocultaban a mano | Se ocultan solos al conectar un control (queda el botón de menú) |
+| Controles de juego en iPadOS 26+ | El control también escribía teclas (flechas, Return, Escape) | Corregido: el control solo actúa como control |
 | Metal | — | Caché de estados de depth-stencil |
 | Bundle ID | `com.chrissotraidis.harkinianpad` | `cl.mtbolanoss.harkinianpad` |
 
@@ -63,6 +68,21 @@ En **Settings → Network**: Anchor, Sail y Crowd Control, igual que en escritor
 Anchor usa `anchor.hm64.org` por defecto. Sail y Crowd Control apuntan a
 `127.0.0.1`, así que en el iPhone hay que poner la IP del equipo que corre el
 servicio.
+
+### Pantalla externa
+
+Con **Extend to External Display** activado (viene así por defecto, en
+**Settings → Graphics**), al conectar una tele o un monitor:
+
+- El juego pasa a pantalla completa en la pantalla externa, a su resolución real
+  de salida. Si pesa demasiado, baja **Internal Resolution**.
+- El dispositivo muestra un ícono de tele y, encima, los controles táctiles, o
+  solo el botón de menú si hay un control conectado.
+- El menú abierto con el botón `•••` aparece en el dispositivo mientras está
+  abierto. Abierto desde un control, aparece en la pantalla externa.
+- Native Screen Resolution y Lock at 60 FPS no aplican mientras haya una pantalla
+  externa: se ven oscurecidos y conservan su valor.
+- Con la opción apagada, la pantalla se duplica como siempre.
 
 ### Scroll táctil en los menús
 
@@ -95,7 +115,7 @@ scripts/package-ios.sh
 El script descarga los commits exactos de upstream ([`sources.lock.json`](sources.lock.json)),
 aplica y verifica los parches, genera el `soh.o2r` sin ROM con el empaquetador
 oficial y compila. El resultado es
-`artifacts/HarkinianPad-0.4.0-preview.17-unsigned.ipa`. Fírmalo con tu
+`artifacts/HarkinianPad-0.4.0-preview.18-unsigned.ipa`. Fírmalo con tu
 herramienta de sideloading de siempre.
 
 El código actual compila para arm64 con iOS/iPadOS 15 o superior.
