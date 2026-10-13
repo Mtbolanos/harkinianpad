@@ -168,7 +168,7 @@ scripts/package-ios.sh
 ```
 
 The default output is
-`artifacts/HarkinianPad-0.4.0-preview.14-unsigned.ipa`. It is deliberately
+`artifacts/HarkinianPad-0.4.0-preview.15-unsigned.ipa`. It is deliberately
 unsigned so AltStore Classic or another compatible personal-signing tool can
 re-sign it for the installer's device.
 

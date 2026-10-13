@@ -1069,7 +1069,7 @@ index 66bf70d0..c96c63f6 100644
 +    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_external_display.mm)
 +endif()
 diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
-index 237a502a..de2b2e2b 100644
+index 237a502a..1fddb5b6 100644
 --- a/src/fast/Fast3dGui.cpp
 +++ b/src/fast/Fast3dGui.cpp
 @@ -12,6 +12,7 @@
@@ -1080,18 +1080,19 @@ index 237a502a..de2b2e2b 100644
  #include <SDL_video.h>
  #include <imgui_impl_metal.h>
  #include <imgui_impl_sdl2.h>
-@@ -22,6 +23,10 @@
+@@ -22,6 +23,11 @@
  
  #if defined(__ANDROID__) || defined(__IOS__)
  #include "ship/port/mobile/MobileImpl.h"
 +#ifdef __IOS__
 +#include "ship/window/gui/IOSTouchScroll.h"
 +extern "C" int LUS_IOSIsExtendedToExternalDisplay(void);
++extern "C" float LUS_IOSDeviceScale(void);
 +#endif
  #endif
  
  #ifdef ENABLE_OPENGL
-@@ -69,7 +74,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
+@@ -69,7 +75,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
      switch (mImpl.Backend) {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
@@ -1106,7 +1107,7 @@ index 237a502a..de2b2e2b 100644
  #if defined(__ANDROID__) || defined(__IOS__)
              Ship::Mobile::ImGuiProcessEvent(ImGui::GetIO().WantTextInput);
  #endif
-@@ -195,6 +207,47 @@ void Fast3dGui::ImGuiBackendShutdown() {
+@@ -195,6 +208,42 @@ void Fast3dGui::ImGuiBackendShutdown() {
      }
  }
  
@@ -1130,23 +1131,18 @@ index 237a502a..de2b2e2b 100644
 +    return (float)pixelWidth / (float)windowWidth;
 +}
 +
-+// Rasterize the font atlas at the drawable's pixel density so menus are sharp, while ImGui keeps
-+// laying out in points. Rebuilds the atlas only when fonts are added or the density changes.
-+static void IOSApplyFontDensity(float scale) {
++// Rasterize the font atlas at the device screen's pixel density so menus are sharp, while ImGui keeps
++// laying out in points. The density is fixed (it does not follow an external display) and is only set on
++// sources the atlas has not built yet: rebuilding a built atlas at runtime is unsafe, because the ports'
++// fonts point to resource memory the atlas does not own (FontDataOwnedByAtlas = false).
++static void IOSApplyFontDensity() {
 +    ImGuiIO& io = ImGui::GetIO();
-+    bool changed = false;
-+    for (ImFontConfig& config : io.Fonts->Sources) {
-+        if (config.RasterizerDensity != scale) {
-+            config.RasterizerDensity = scale;
-+            changed = true;
-+        }
++    if (io.Fonts->IsBuilt()) {
++        return;
 +    }
-+    if (changed && io.Fonts->IsBuilt()) {
-+        io.Fonts->ClearTexData();
-+        io.Fonts->Build();
-+        // The Metal backend only creates the font texture together with its device objects, so drop them
-+        // all; ImGui_ImplMetal_NewFrame recreates them (with the new atlas) on the next frame.
-+        ImGui_ImplMetal_DestroyDeviceObjects();
++    const float scale = LUS_IOSDeviceScale();
++    for (ImFontConfig& config : io.Fonts->Sources) {
++        config.RasterizerDensity = scale;
 +    }
 +}
 +#endif
@@ -1154,17 +1150,17 @@ index 237a502a..de2b2e2b 100644
  void Fast3dGui::ImGuiBackendNewFrame() {
      switch (mImpl.Backend) {
  #ifdef ENABLE_OPENGL
-@@ -211,6 +264,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
+@@ -211,6 +260,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
  
  #ifdef __APPLE__
          case WindowBackend::FAST3D_SDL_METAL: {
 +#ifdef __IOS__
-+            IOSApplyFontDensity(IOSDrawableScale(mImpl));
++            IOSApplyFontDensity();
 +#endif
              GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
              api->NewFrame();
              break;
-@@ -226,6 +282,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
+@@ -226,6 +278,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
              ImGui_ImplSDL2_NewFrame();
@@ -1178,7 +1174,7 @@ index 237a502a..de2b2e2b 100644
              break;
  #ifdef ENABLE_DX11
          case WindowBackend::FAST3D_DXGI_DX11:
-@@ -320,8 +383,22 @@ void Fast3dGui::CalculateGameViewport() {
+@@ -320,8 +379,22 @@ void Fast3dGui::CalculateGameViewport() {
      mainPos.y -= mTemporaryWindowPos.y;
      ImVec2 size = ImGui::GetContentRegionAvail();
      const auto interpreter = mInterpreter.lock().get();
@@ -1241,10 +1237,10 @@ index 2b77a5f2..dc8efeff 100644
  
 diff --git a/src/fast/backends/gfx_ios_display.mm b/src/fast/backends/gfx_ios_display.mm
 new file mode 100644
-index 00000000..f08f86c5
+index 00000000..cf00ca6e
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_display.mm
-@@ -0,0 +1,41 @@
+@@ -0,0 +1,47 @@
 +#ifdef __IOS__
 +#import <Foundation/Foundation.h>
 +#import <UIKit/UIKit.h>
@@ -1257,6 +1253,12 @@ index 00000000..f08f86c5
 +// 120 Hz while presentation is held at 60 Hz makes each interpolated game tick take twice as long, which
 +// shows up as the game running at half speed with very low effective frame rates.
 +extern "C" void* LUS_IOSPresentationScreen(void);
++
++// Pixel density of the device's own screen (3 on most iPhones, 2 on iPads).
++extern "C" float LUS_IOSDeviceScale(void) {
++    const CGFloat scale = UIScreen.mainScreen.nativeScale;
++    return scale > 0.0 ? (float)scale : 1.0f;
++}
 +
 +extern "C" int LUS_IOSEffectiveMaxRefreshRate(void) {
 +    static int sPhoneHighRefreshAllowed = -1;
@@ -1605,10 +1607,18 @@ index 00000000..6d6958be
 +}
 +#endif
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
-index 00eaedbc..97cbb8ea 100644
+index 00eaedbc..3da4de52 100644
 --- a/src/fast/backends/gfx_metal.cpp
 +++ b/src/fast/backends/gfx_metal.cpp
-@@ -45,6 +45,18 @@
+@@ -16,6 +16,7 @@
+ #include <time.h>
+ #include <math.h>
+ #include <cmath>
++#include <cstdlib>
+ #include <stddef.h>
+ 
+ #ifndef _LANGUAGE_C
+@@ -45,6 +46,18 @@
  // MARK: - Helpers
  namespace Fast {
  
@@ -1627,7 +1637,28 @@ index 00eaedbc..97cbb8ea 100644
  static MTL::SamplerAddressMode gfx_cm_to_metal(uint32_t val) {
      switch (val) {
          case G_TX_NOMIRROR | G_TX_CLAMP:
-@@ -454,20 +466,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
+@@ -118,10 +131,20 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
+ 
+     // Workaround for detecting when transitioning to/from full screen mode.
+     MTL::Texture* screen_texture = mTextures[framebuffer.mTextureId].texture;
++#ifdef __IOS__
++    // Round, and allow a pixel of slack: external displays can have non-integer point scales (an iPad on a
++    // 4K TV is 3840 / 3008 = 1.2766x), where truncation is one pixel short and nothing would be drawn.
++    const long fb_width = std::lround(drawData->DisplaySize.x * drawData->FramebufferScale.x);
++    const long fb_height = std::lround(drawData->DisplaySize.y * drawData->FramebufferScale.y);
++    if (std::labs((long)screen_texture->width() - fb_width) > 1 ||
++        std::labs((long)screen_texture->height() - fb_height) > 1)
++        return;
++#else
+     int fb_width = (int)(drawData->DisplaySize.x * drawData->FramebufferScale.x);
+     int fb_height = (int)(drawData->DisplaySize.y * drawData->FramebufferScale.y);
+     if (screen_texture->width() != fb_width || screen_texture->height() != fb_height)
+         return;
++#endif
+ 
+     ImGui_ImplMetal_RenderDrawData(drawData, framebuffer.mCommandBuffer, framebuffer.mCommandEncoder);
+ }
+@@ -454,20 +477,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
      auto& current_framebuffer = mFramebuffers[mCurrentFramebuffer];
  
      if (current_framebuffer.mLastDepthTest != mCurrentDepthTest ||
