@@ -557,6 +557,44 @@ index 000000000..10f3cef81
 +// Copies into a new batch directory; never replaces existing packs. Throws on failure.
 +size_t Import(const std::filesystem::path& input, const std::filesystem::path& destination);
 +}
+diff --git a/soh/soh/Enhancements/Presets/Presets.cpp b/soh/soh/Enhancements/Presets/Presets.cpp
+index fc21dfd50..00a2f4c57 100644
+--- a/soh/soh/Enhancements/Presets/Presets.cpp
++++ b/soh/soh/Enhancements/Presets/Presets.cpp
+@@ -538,6 +538,25 @@ void PresetsCustomWidget(WidgetInfo& info) {
+     bool hideBuiltIn = CVarGetInteger(CVAR_GENERAL("HideBuiltInPresets"), 0);
+     UIWidgets::PushStyleTabs(THEME_COLOR);
+     if (ImGui::BeginTable("PresetWidgetTable", PRESET_SECTION_MAX + 4)) {
++#ifdef __IOS__
++        // A 400-point name column leaves no room on a phone and ImGui squeezes the buttons into slivers: size the
++        // name column to the longest name, and the button columns to the buttons' own 6-point padding.
++        float nameWidth = ImGui::CalcTextSize("Name").x;
++        for (auto& [presetName, presetInfo] : presets) {
++            if (!(hideBuiltIn && presetInfo.isBuiltIn)) {
++                nameWidth = std::max(nameWidth, ImGui::CalcTextSize(presetName.c_str()).x);
++            }
++        }
++        const float buttonPadding = 6.0f * 2 + 2.0f;
++        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, nameWidth + 8.0f);
++        for (int i = PRESET_SECTION_SETTINGS; i < PRESET_SECTION_MAX; i++) {
++            ImGui::TableSetupColumn(blockInfo[i].names[0].c_str());
++        }
++        ImGui::TableSetupColumn("Apply", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Apply").x + buttonPadding);
++        ImGui::TableSetupColumn("Edit", ImGuiTableColumnFlags_WidthFixed, ImGui::CalcTextSize("Edit").x + buttonPadding);
++        ImGui::TableSetupColumn("Delete", ImGuiTableColumnFlags_WidthFixed,
++                                ImGui::CalcTextSize("Delete").x + buttonPadding);
++#else
+         ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthFixed, 400);
+         for (int i = PRESET_SECTION_SETTINGS; i < PRESET_SECTION_MAX; i++) {
+             ImGui::TableSetupColumn(blockInfo[i].names[0].c_str());
+@@ -548,6 +567,7 @@ void PresetsCustomWidget(WidgetInfo& info) {
+                                 ImGui::CalcTextSize("Edit").x + ImGui::GetStyle().FramePadding.x * 2);
+         ImGui::TableSetupColumn("Delete", ImGuiTableColumnFlags_WidthFixed,
+                                 ImGui::CalcTextSize("Delete").x + ImGui::GetStyle().FramePadding.x * 2);
++#endif
+         BlankButton();
+         ImGui::TableNextRow();
+         ImGui::TableNextColumn();
 diff --git a/soh/soh/Enhancements/bootcommands.c b/soh/soh/Enhancements/bootcommands.c
 index baf3dc261..817b47814 100644
 --- a/soh/soh/Enhancements/bootcommands.c
