@@ -4,9 +4,10 @@ name: HarkinianPad iOS build
 # trees are pinned build inputs; this workflow never publishes to them.
 
 on:
+  # No pull_request trigger: a branch is already built (workflow_dispatch) before it is merged, and the
+  # merge itself builds main. GitHub disabled Actions on this fork once after heavy macOS usage.
   push:
     branches: [main]
-  pull_request:
   workflow_dispatch:
 
 concurrency:
