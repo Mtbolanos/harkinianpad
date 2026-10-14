@@ -8,6 +8,8 @@ int HarkinianPad_TouchControlsAvailable(void);
 void HarkinianPad_SetTouchControlsEnabled(int enabled);
 void HarkinianPad_SetCustomizableTouchControlsEnabled(int enabled);
 void HarkinianPad_SetTouchControlsOpacity(float opacity);
+void HarkinianPad_SetTouchCameraStickEnabled(int enabled);
+void HarkinianPad_SetTouchHapticsEnabled(int enabled);
 void HarkinianPad_BeginTouchLayoutEditing(void);
 void HarkinianPad_SetTouchControlsMenuVisible(int visible);
 
@@ -23,6 +25,7 @@ enum {
 
 void HarkinianPad_SetNativeHudTouchEnabled(int enabled);
 void HarkinianPad_SetNativeHudTouchGameplayActive(int active);
+void HarkinianPad_SetOcarinaInstrumentActive(int active);
 int HarkinianPad_GetNativeHudButtonCenter(int button, float aspectRatio, float* x, float* y);
 float HarkinianPad_GetNativeHudButtonScale(int button, float aspectRatio);
 int HarkinianPad_GetNativeHudTouchAlpha(int alpha);

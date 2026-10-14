@@ -36,7 +36,7 @@ render en Metal y controles táctiles personalizables. Hice este fork porque que
 
 ## Qué cambia respecto del original
 
-| | HarkinianPad 0.2.1 (original) | Este fork 0.4.1 |
+| | HarkinianPad 0.2.1 (original) | Este fork 0.5.1 |
 |---|---|---|
 | Upstream | `develop` (9.2.3 + 301 commits) | **Ship of Harkinian 9.3.0 "Dewey"** |
 | Fuentes | Forks propios de Shipwright y libultraship | Upstream oficial fijado por commit + parches revisables en [`patches/`](patches/) |
@@ -47,7 +47,7 @@ render en Metal y controles táctiles personalizables. Hice este fork porque que
 | Tope de FPS | — | **Lock at 60 FPS**, opcional, para jugar a resolución nativa con 60 estables |
 | Menús táctiles | Sin scroll con el dedo | Scroll con un dedo e inercia, sin mover sliders por accidente. Tooltips con el dedo quieto |
 | Pantalla externa | Solo duplicaba la pantalla | **Extend to External Display**: el juego a pantalla completa en la tele o el monitor (USB-C/HDMI o AirPlay) y el dispositivo como control |
-| Controles táctiles | Se ocultaban a mano | Se ocultan solos al conectar un control (queda el botón de menú) |
+| Controles táctiles | Escribían teclas del teclado y el stick era digital. Se ocultaban a mano | Actúan directo como el control del jugador 1, con mapeo fijo y stick análogo. **Touch Camera Stick** opcional para Free Look y vibración al presionar. Se ocultan solos al conectar un control (queda el botón de menú) |
 | Controles de juego en iPadOS 26+ | El control también escribía teclas (flechas, Return, Escape) | Corregido: el control solo actúa como control |
 | Metal | — | Caché de estados de depth-stencil |
 | Bundle ID | `com.chrissotraidis.harkinianpad` | `cl.mtbolanoss.harkinianpad` |
@@ -68,6 +68,19 @@ En **Settings → Network**: Anchor, Sail y Crowd Control, igual que en escritor
 Anchor usa `anchor.hm64.org` por defecto. Sail y Crowd Control apuntan a
 `127.0.0.1`, así que en el iPhone hay que poner la IP del equipo que corre el
 servicio.
+
+### Controles táctiles
+
+En **Settings → Controls**:
+
+- Los botones táctiles actúan directo sobre el control del jugador 1, con un mapeo
+  fijo: A es siempre A, C-Up es siempre C-Up, sin importar los bindings. El
+  teclado queda libre, y el stick táctil es análogo (con una zona muerta pequeña).
+- **Touch Camera Stick** (apagado por defecto) agrega un segundo stick que actúa
+  como el stick derecho, para Free Look (hay que activar Free Look). Se mueve y
+  cambia de tamaño en **Customize Touch Layout**.
+- **Touch Haptics** (encendido por defecto): vibración suave al presionar un
+  botón táctil.
 
 ### Pantalla externa
 
@@ -117,7 +130,7 @@ scripts/package-ios.sh
 El script descarga los commits exactos de upstream ([`sources.lock.json`](sources.lock.json)),
 aplica y verifica los parches, genera el `soh.o2r` sin ROM con el empaquetador
 oficial y compila. El resultado es
-`artifacts/HarkinianPad-0.4.1-preview.19-unsigned.ipa`. Fírmalo con tu
+`artifacts/HarkinianPad-0.5.1-preview.22-unsigned.ipa`. Fírmalo con tu
 herramienta de sideloading de siempre.
 
 El código actual compila para arm64 con iOS/iPadOS 15 o superior.
