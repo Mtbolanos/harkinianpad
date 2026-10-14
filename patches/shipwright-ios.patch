@@ -1511,6 +1511,30 @@ index 476f99f3f..1c2433145 100644
      AddWidget(path, "Clear Devices", WIDGET_BUTTON)
          .Callback([](WidgetInfo& info) {
              SohGui::mModalWindow->RegisterPopup(
+diff --git a/soh/src/code/code_800EC960.c b/soh/src/code/code_800EC960.c
+index a118f3388..541bd630a 100644
+--- a/soh/src/code/code_800EC960.c
++++ b/soh/src/code/code_800EC960.c
+@@ -7,6 +7,9 @@
+ #include "soh/Enhancements/game-interactor/GameInteractor_Hooks.h"
+ #include "soh/Enhancements/savestate_serialize.h"
+ #include <libultraship/bridge/consolevariablebridge.h>
++#ifdef __IOS__
++#include "ios/HarkinianPadTouchControls.h"
++#endif
+ 
+ // TODO: can these macros be shared between files? code_800F9280 seems to use
+ // versions without any casts...
+@@ -1999,6 +2002,9 @@ void AudioOcarina_SetInstrument(u8 ocarinaInstrumentId) {
+ 
+     Audio_SeqCmd8(SEQ_PLAYER_SFX, 1, SFX_CHANNEL_OCARINA, ocarinaInstrumentId);
+     sOcarinaInstrumentId = ocarinaInstrumentId;
++#ifdef __IOS__
++    HarkinianPad_SetOcarinaInstrumentActive(ocarinaInstrumentId != OCARINA_INSTRUMENT_OFF);
++#endif
+     if (ocarinaInstrumentId == OCARINA_INSTRUMENT_OFF) {
+         sOcarinaInputButtonCur = 0;
+         sOcarinaInputButtonPrev = 0;
 diff --git a/soh/src/code/graph.c b/soh/src/code/graph.c
 index 4190955a9..a27c529e0 100644
 --- a/soh/src/code/graph.c

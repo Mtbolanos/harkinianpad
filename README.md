@@ -36,7 +36,7 @@ render en Metal y controles táctiles personalizables. Hice este fork porque que
 
 ## Qué cambia respecto del original
 
-| | HarkinianPad 0.2.1 (original) | Este fork 0.5.0 |
+| | HarkinianPad 0.2.1 (original) | Este fork 0.5.1 |
 |---|---|---|
 | Upstream | `develop` (9.2.3 + 301 commits) | **Ship of Harkinian 9.3.0 "Dewey"** |
 | Fuentes | Forks propios de Shipwright y libultraship | Upstream oficial fijado por commit + parches revisables en [`patches/`](patches/) |
@@ -130,7 +130,7 @@ scripts/package-ios.sh
 El script descarga los commits exactos de upstream ([`sources.lock.json`](sources.lock.json)),
 aplica y verifica los parches, genera el `soh.o2r` sin ROM con el empaquetador
 oficial y compila. El resultado es
-`artifacts/HarkinianPad-0.5.0-preview.21-unsigned.ipa`. Fírmalo con tu
+`artifacts/HarkinianPad-0.5.1-preview.22-unsigned.ipa`. Fírmalo con tu
 herramienta de sideloading de siempre.
 
 El código actual compila para arm64 con iOS/iPadOS 15 o superior.

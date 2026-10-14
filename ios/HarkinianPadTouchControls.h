@@ -25,6 +25,7 @@ enum {
 
 void HarkinianPad_SetNativeHudTouchEnabled(int enabled);
 void HarkinianPad_SetNativeHudTouchGameplayActive(int active);
+void HarkinianPad_SetOcarinaInstrumentActive(int active);
 int HarkinianPad_GetNativeHudButtonCenter(int button, float aspectRatio, float* x, float* y);
 float HarkinianPad_GetNativeHudButtonScale(int button, float aspectRatio);
 int HarkinianPad_GetNativeHudTouchAlpha(int alpha);
