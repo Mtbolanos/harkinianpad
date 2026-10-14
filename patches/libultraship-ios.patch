@@ -1971,6 +1971,54 @@ index 295c4dc2..ca80eb7c 100644
  int32_t WindowGetPosX() {
      return Ship::Context::GetRawInstance()->GetWindow()->GetPosX();
  }
+diff --git a/src/libultraship/controller/controldeck/ControlDeck.cpp b/src/libultraship/controller/controldeck/ControlDeck.cpp
+index c7c96f63..94a0c8eb 100644
+--- a/src/libultraship/controller/controldeck/ControlDeck.cpp
++++ b/src/libultraship/controller/controldeck/ControlDeck.cpp
+@@ -7,6 +7,15 @@
+ #include <imgui.h>
+ #include "ship/controller/controldevice/controller/mapping/mouse/WheelHandler.h"
+ 
++#ifdef __IOS__
++#include <algorithm>
++#include <cmath>
++// Implemented by each iOS port: the on-screen controls in N64 terms (fixed, never remapped). Sticks are
++// normalized to -1..1 with +y up. Returns 0 when nothing is touched.
++extern "C" int ShipIOS_GetTouchPadState(uint32_t* buttons, float* stickX, float* stickY, float* cameraX,
++                                        float* cameraY);
++#endif
++
+ namespace LUS {
+ ControlDeck::ControlDeck(std::vector<CONTROLLERBUTTONS_T> additionalBitmasks,
+                          std::shared_ptr<Ship::ControllerDefaultMappings> controllerDefaultMappings,
+@@ -70,5 +79,27 @@ void ControlDeck::WriteToOSContPad(OSContPad* pad) {
+             controller->ReadToPad(&pad[i]);
+         }
+     }
++
++#ifdef __IOS__
++    // Touch controls feed player 1 directly: buttons add to the controller's, and a touched stick replaces
++    // the controller's stick while it is held.
++    uint32_t touchButtons = 0;
++    float stickX = 0.0f, stickY = 0.0f, cameraX = 0.0f, cameraY = 0.0f;
++    if (!mPorts.empty() && ShipIOS_GetTouchPadState(&touchButtons, &stickX, &stickY, &cameraX, &cameraY)) {
++        constexpr float kAxisRange = 85.0f; // MAX_AXIS_RANGE, as for physical sticks
++        auto axis = [](float value) {
++            return static_cast<int8_t>(std::lround(std::clamp(value, -1.0f, 1.0f) * kAxisRange));
++        };
++        pad[0].button |= static_cast<CONTROLLERBUTTONS_T>(touchButtons);
++        if (stickX != 0.0f || stickY != 0.0f) {
++            pad[0].stick_x = axis(stickX);
++            pad[0].stick_y = axis(stickY);
++        }
++        if (cameraX != 0.0f || cameraY != 0.0f) {
++            pad[0].right_stick_x = axis(cameraX);
++            pad[0].right_stick_y = axis(cameraY);
++        }
++    }
++#endif
+ }
+ } // namespace LUS
 diff --git a/src/libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.cpp b/src/libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.cpp
 index c431c346..1bce6004 100644
 --- a/src/libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.cpp

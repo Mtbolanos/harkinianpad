@@ -8,6 +8,7 @@ int HarkinianPad_TouchControlsAvailable(void);
 void HarkinianPad_SetTouchControlsEnabled(int enabled);
 void HarkinianPad_SetCustomizableTouchControlsEnabled(int enabled);
 void HarkinianPad_SetTouchControlsOpacity(float opacity);
+void HarkinianPad_SetTouchCameraStickEnabled(int enabled);
 void HarkinianPad_BeginTouchLayoutEditing(void);
 void HarkinianPad_SetTouchControlsMenuVisible(int visible);
 

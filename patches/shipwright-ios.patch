@@ -1320,7 +1320,7 @@ index ae098993e..63643493f 100644
            { [](disabledInfo& info) -> bool { return CVarGetInteger(CVAR_PREFIX_ADVANCED_RESOLUTION ".Enabled", 0); },
              "Advanced Resolution Enabled" } },
 diff --git a/soh/soh/SohGui/SohMenuSettings.cpp b/soh/soh/SohGui/SohMenuSettings.cpp
-index 476f99f3f..b0755782c 100644
+index 476f99f3f..c6702417e 100644
 --- a/soh/soh/SohGui/SohMenuSettings.cpp
 +++ b/soh/soh/SohGui/SohMenuSettings.cpp
 @@ -9,6 +9,10 @@
@@ -1406,7 +1406,7 @@ index 476f99f3f..b0755782c 100644
          })
          .Options(IntSliderOptions().Tooltip(tooltip).Min(20).Max(maxFps).DefaultValue(20).Format(fpsFormat));
      AddWidget(path, "Match Refresh Rate", WIDGET_CVAR_CHECKBOX)
-@@ -436,6 +485,89 @@ void SohMenu::AddMenuSettings() {
+@@ -436,6 +485,101 @@ void SohMenu::AddMenuSettings() {
      path.sidebarName = "Controls";
      path.column = SECTION_COLUMN_1;
      AddSidebarEntry("Settings", "Controls", 2);
@@ -1457,6 +1457,18 @@ index 476f99f3f..b0755782c 100644
 +                     .Max(1.0f)
 +                     .DefaultValue(0.5f)
 +                     .Tooltip("Sets touch-control opacity. Lower values show more of the game beneath them."));
++    AddWidget(path, "Touch Camera Stick", WIDGET_CVAR_CHECKBOX)
++        .CVar(CVAR_SETTING("HarkinianPad.TouchCameraStick"))
++        .Callback([](WidgetInfo& info) {
++            HarkinianPad_SetTouchCameraStickEnabled(CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchCameraStick"), 0));
++        })
++        .Options(CheckboxOptions()
++                     .DefaultValue(false)
++                     .Tooltip("Adds a second touch stick that works as the right stick, for Free Look (Free Look "
++                              "must be enabled). Its position and size can be changed in the touch layout editor."));
++    AddWidget(path, "Touch Haptics", WIDGET_CVAR_CHECKBOX)
++        .CVar(CVAR_SETTING("HarkinianPad.TouchHaptics"))
++        .Options(CheckboxOptions().DefaultValue(true).Tooltip("Light vibration when a touch button is pressed."));
 +    AddWidget(path, "Legacy Fixed Touch Controls", WIDGET_CVAR_CHECKBOX)
 +        .CVar(CVAR_SETTING("HarkinianPad.LegacyFixedTouchControls"))
 +        .RaceDisable(false)
