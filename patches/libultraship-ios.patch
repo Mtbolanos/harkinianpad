@@ -1046,7 +1046,7 @@ index 66bf70d0..c96c63f6 100644
 +    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_external_display.mm)
 +endif()
 diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
-index 237a502a..1fddb5b6 100644
+index 237a502a..a0077150 100644
 --- a/src/fast/Fast3dGui.cpp
 +++ b/src/fast/Fast3dGui.cpp
 @@ -12,6 +12,7 @@
@@ -1057,19 +1057,20 @@ index 237a502a..1fddb5b6 100644
  #include <SDL_video.h>
  #include <imgui_impl_metal.h>
  #include <imgui_impl_sdl2.h>
-@@ -22,6 +23,11 @@
+@@ -22,6 +23,12 @@
  
  #if defined(__ANDROID__) || defined(__IOS__)
  #include "ship/port/mobile/MobileImpl.h"
 +#ifdef __IOS__
 +#include "ship/window/gui/IOSTouchScroll.h"
 +extern "C" int LUS_IOSIsExtendedToExternalDisplay(void);
++extern "C" int LUS_IOSExternalDisplayActive(void);
 +extern "C" float LUS_IOSDeviceScale(void);
 +#endif
  #endif
  
  #ifdef ENABLE_OPENGL
-@@ -69,7 +75,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
+@@ -69,7 +76,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
      switch (mImpl.Backend) {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
@@ -1084,7 +1085,7 @@ index 237a502a..1fddb5b6 100644
  #if defined(__ANDROID__) || defined(__IOS__)
              Ship::Mobile::ImGuiProcessEvent(ImGui::GetIO().WantTextInput);
  #endif
-@@ -195,6 +208,42 @@ void Fast3dGui::ImGuiBackendShutdown() {
+@@ -195,6 +209,42 @@ void Fast3dGui::ImGuiBackendShutdown() {
      }
  }
  
@@ -1127,7 +1128,7 @@ index 237a502a..1fddb5b6 100644
  void Fast3dGui::ImGuiBackendNewFrame() {
      switch (mImpl.Backend) {
  #ifdef ENABLE_OPENGL
-@@ -211,6 +260,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
+@@ -211,6 +261,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
  
  #ifdef __APPLE__
          case WindowBackend::FAST3D_SDL_METAL: {
@@ -1137,7 +1138,7 @@ index 237a502a..1fddb5b6 100644
              GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
              api->NewFrame();
              break;
-@@ -226,6 +278,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
+@@ -226,6 +279,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
              ImGui_ImplSDL2_NewFrame();
@@ -1151,7 +1152,7 @@ index 237a502a..1fddb5b6 100644
              break;
  #ifdef ENABLE_DX11
          case WindowBackend::FAST3D_DXGI_DX11:
-@@ -320,8 +379,22 @@ void Fast3dGui::CalculateGameViewport() {
+@@ -320,8 +380,25 @@ void Fast3dGui::CalculateGameViewport() {
      mainPos.y -= mTemporaryWindowPos.y;
      ImVec2 size = ImGui::GetContentRegionAvail();
      const auto interpreter = mInterpreter.lock().get();
@@ -1163,8 +1164,11 @@ index 237a502a..1fddb5b6 100644
 +    // Render the game at the screen's pixel resolution: opt-in on the device, always on an external display
 +    // (whose drawable already matches its output mode). The viewport is measured in UIKit points, so scale
 +    // it by the drawable's density.
-+    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0) ||
-+        LUS_IOSIsExtendedToExternalDisplay()) {
++    // While an external display is active, Native Screen Resolution does not apply on the device either (the
++    // game only sits behind a touch-opened menu there); ImGui itself always draws at full resolution.
++    if (LUS_IOSIsExtendedToExternalDisplay() ||
++        (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0) &&
++         !LUS_IOSExternalDisplayActive())) {
 +        nativeScaleX = ImGui::GetIO().DisplayFramebufferScale.x;
 +        nativeScaleY = ImGui::GetIO().DisplayFramebufferScale.y;
 +    }
@@ -1214,13 +1218,17 @@ index 2b77a5f2..dc8efeff 100644
  
 diff --git a/src/fast/backends/gfx_ios_display.mm b/src/fast/backends/gfx_ios_display.mm
 new file mode 100644
-index 00000000..cf00ca6e
+index 00000000..801ce058
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_display.mm
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,85 @@
 +#ifdef __IOS__
 +#import <Foundation/Foundation.h>
++#import <AVFoundation/AVFoundation.h>
++#import <QuartzCore/QuartzCore.h>
 +#import <UIKit/UIKit.h>
++
++#include <atomic>
 +
 +// Refresh rate that Core Animation will actually deliver to this process.
 +//
@@ -1264,10 +1272,44 @@ index 00000000..cf00ca6e
 +    }
 +    return (int)panel;
 +}
++
++// Audio output route changes (HDMI/USB-C display, AirPlay, headphones, AirPods). SDL2 on iOS only handles
++// interruptions; its device-change handling is macOS-only, so after a route change its audio queue can stay
++// silent. The observer records the change; the main loop then reopens the audio player once the route has
++// been stable for a moment (several notifications usually arrive together).
++static std::atomic<double> sAudioRouteChangedAt(0.0);
++
++extern "C" void LUS_IOSInstallAudioRouteObserver(void) {
++    static dispatch_once_t once;
++    dispatch_once(&once, ^{
++        [NSNotificationCenter.defaultCenter addObserverForName:AVAudioSessionRouteChangeNotification
++                                                        object:nil
++                                                         queue:nil
++                                                    usingBlock:^(NSNotification* note) {
++            const NSUInteger reason =
++                [note.userInfo[AVAudioSessionRouteChangeReasonKey] unsignedIntegerValue];
++            if (reason == AVAudioSessionRouteChangeReasonNewDeviceAvailable ||
++                reason == AVAudioSessionRouteChangeReasonOldDeviceUnavailable ||
++                reason == AVAudioSessionRouteChangeReasonRouteConfigurationChange) {
++                sAudioRouteChangedAt.store(CACurrentMediaTime());
++            }
++        }];
++    });
++}
++
++// True once per route change, after it has settled for half a second.
++extern "C" int LUS_IOSConsumeAudioRouteChange(void) {
++    const double changedAt = sAudioRouteChangedAt.load();
++    if (changedAt <= 0.0 || CACurrentMediaTime() - changedAt < 0.5) {
++        return 0;
++    }
++    double expected = changedAt;
++    return sAudioRouteChangedAt.compare_exchange_strong(expected, 0.0) ? 1 : 0;
++}
 +#endif
 diff --git a/src/fast/backends/gfx_ios_external_display.mm b/src/fast/backends/gfx_ios_external_display.mm
 new file mode 100644
-index 00000000..972547ec
+index 00000000..d75917e6
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_external_display.mm
 @@ -0,0 +1,280 @@
@@ -1545,10 +1587,10 @@ index 00000000..972547ec
 +    return sSurfaceOnExternal ? (__bridge void*)sDeviceHostWindow : NULL;
 +}
 +
-+// The screen whose refresh rate paces the game.
++// The screen whose refresh rate paces the game: the external display whenever it is active, also while a
++// touch-opened menu is shown on the device (the game keeps the display's pace instead of jumping to 120 Hz).
 +extern "C" void* LUS_IOSPresentationScreen(void) {
-+    return (__bridge void*)((sSurfaceOnExternal && sExternalScene != nil) ? sExternalScene.screen
-+                                                                           : UIScreen.mainScreen);
++    return (__bridge void*)(LUS_IOSExternalDisplayActive() ? sExternalScene.screen : UIScreen.mainScreen);
 +}
 +#endif
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
@@ -1638,7 +1680,7 @@ index 00eaedbc..3da4de52 100644
  
      if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index 15c5415f..53a741e5 100644
+index 15c5415f..e78f25fd 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
 @@ -11,6 +11,11 @@
@@ -1716,7 +1758,7 @@ index 15c5415f..53a741e5 100644
      // Implement fullscreening with native macOS APIs
      if (on != isNativeMacOSFullscreenActive(mWnd)) {
          toggleNativeMacOSFullscreen(mWnd);
-@@ -273,7 +311,18 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -273,7 +311,20 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
      }
  }
  
@@ -1724,6 +1766,8 @@ index 15c5415f..53a741e5 100644
 +extern "C" int LUS_IOSEffectiveMaxRefreshRate(void);
 +extern "C" void LUS_IOSExternalDisplayAttachWindow(void* uiWindow);
 +extern "C" void LUS_IOSExternalDisplayUpdate(void);
++extern "C" void LUS_IOSInstallAudioRouteObserver(void);
++extern "C" int LUS_IOSConsumeAudioRouteChange(void);
 +#endif
 +
  void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
@@ -1735,7 +1779,7 @@ index 15c5415f..53a741e5 100644
      int display_in_use = SDL_GetWindowDisplayIndex(mWnd);
  
      SDL_DisplayMode mode;
-@@ -374,7 +423,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -374,7 +425,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
  
  #ifdef __IOS__
@@ -1747,7 +1791,7 @@ index 15c5415f..53a741e5 100644
  #else
      Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
  #endif
-@@ -386,6 +438,15 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -386,6 +440,16 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      }
  
      mWnd = SDL_CreateWindow(title, posX, posY, mWindowWidth, mWindowHeight, flags);
@@ -1759,11 +1803,12 @@ index 15c5415f..53a741e5 100644
 +            LUS_IOSExternalDisplayAttachWindow((void*)iosWmInfo.info.uikit.window);
 +        }
 +    }
++    LUS_IOSInstallAudioRouteObserver();
 +#endif
  #ifdef _WIN32
      // Get Windows window handle and use it to subclass the window procedure.
      // Needed to circumvent SDLs DPI scaling problems under windows (original does only scale *sometimes*).
-@@ -434,6 +495,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -434,6 +498,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
@@ -1777,7 +1822,7 @@ index 15c5415f..53a741e5 100644
          window_impl.Metal = { mWnd, mRenderer };
          window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
      }
-@@ -626,9 +694,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -626,9 +697,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
              OnKeyup(event.key.keysym.scancode);
              break;
          case SDL_MOUSEBUTTONDOWN:
@@ -1797,7 +1842,7 @@ index 15c5415f..53a741e5 100644
              OnMouseButtonUp(event.button.button - 1);
              break;
          case SDL_MOUSEWHEEL:
-@@ -657,6 +735,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -657,6 +738,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
          case SDL_DROPFILE:
              Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
              break;
@@ -1834,12 +1879,19 @@ index 15c5415f..53a741e5 100644
          case SDL_QUIT:
              Close();
              break;
-@@ -664,17 +772,20 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -664,17 +775,27 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
  }
  
  void GfxWindowBackendSDL2::HandleEvents() {
 +#ifdef __IOS__
 +    LUS_IOSExternalDisplayUpdate();
++    if (LUS_IOSConsumeAudioRouteChange()) {
++        // Reopen the audio player on the new output, as switching the audio backend in the menu does.
++        auto audio = Ship::Context::GetRawInstance()->GetAudio();
++        if (audio != nullptr) {
++            audio->SetCurrentAudioBackend(audio->GetCurrentAudioBackend());
++        }
++    }
 +#endif
      SDL_Event event;
      SDL_PumpEvents();
@@ -1857,7 +1909,7 @@ index 15c5415f..53a741e5 100644
      auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
      if (mFullScreen != nextFullscreenState) {
          mFullScreen = nextFullscreenState;
-@@ -686,7 +797,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -686,7 +807,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
  }
  
  bool GfxWindowBackendSDL2::IsFrameReady() {
@@ -1869,7 +1921,7 @@ index 15c5415f..53a741e5 100644
  }
  
  static uint64_t qpc_to_100ns(uint64_t qpc) {
-@@ -774,7 +889,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
+@@ -774,7 +899,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
  }
  
  bool GfxWindowBackendSDL2::CanDisableVsync() {
