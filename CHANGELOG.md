@@ -3,6 +3,12 @@
 Versión y build de cada IPA (`version.json`). Los builds intermedios de prueba se compilaron en ramas
 aparte y no se listan.
 
+## 0.5.2 (build 23)
+
+- **Import JSON from Files** (menú Randomizer, junto a Spoiler File, y Network → Anchor): carga el spoiler
+  del randomizer que comparte el host para Anchor, o una configuración compartida, igual que soltar el
+  archivo en la ventana en escritorio.
+
 ## 0.5.1 (build 22)
 
 - Con los controles táctiles dinámicos, al sacar la ocarina se muestran los botones táctiles normales,

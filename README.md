@@ -36,7 +36,7 @@ render en Metal y controles táctiles personalizables. Hice este fork porque que
 
 ## Qué cambia respecto del original
 
-| | HarkinianPad 0.2.1 (original) | Este fork 0.5.1 |
+| | HarkinianPad 0.2.1 (original) | Este fork 0.5.2 |
 |---|---|---|
 | Upstream | `develop` (9.2.3 + 301 commits) | **Ship of Harkinian 9.3.0 "Dewey"** |
 | Fuentes | Forks propios de Shipwright y libultraship | Upstream oficial fijado por commit + parches revisables en [`patches/`](patches/) |
@@ -65,6 +65,9 @@ En **Settings → Graphics**:
   su marca y vuelve a aplicarse al encenderla.
 
 En **Settings → Network**: Anchor, Sail y Crowd Control, igual que en escritorio.
+Para unirse a la seed del host en Anchor (o cargar un spoiler o una configuración
+compartida), usa **Import JSON from Files** en el menú Randomizer o en
+Network → Anchor: reemplaza el arrastrar el archivo a la ventana de escritorio.
 Anchor usa `anchor.hm64.org` por defecto. Sail y Crowd Control apuntan a
 `127.0.0.1`, así que en el iPhone hay que poner la IP del equipo que corre el
 servicio.
@@ -130,7 +133,7 @@ scripts/package-ios.sh
 El script descarga los commits exactos de upstream ([`sources.lock.json`](sources.lock.json)),
 aplica y verifica los parches, genera el `soh.o2r` sin ROM con el empaquetador
 oficial y compila. El resultado es
-`artifacts/HarkinianPad-0.5.1-preview.22-unsigned.ipa`. Fírmalo con tu
+`artifacts/HarkinianPad-0.5.2-preview.23-unsigned.ipa`. Fírmalo con tu
 herramienta de sideloading de siempre.
 
 El código actual compila para arm64 con iOS/iPadOS 15 o superior.
