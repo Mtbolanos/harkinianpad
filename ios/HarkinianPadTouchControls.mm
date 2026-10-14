@@ -703,7 +703,6 @@ static HarkinianPadTouchButton* sMenuButton;
 
         // Promoted from the accepted physical iPhone layout.
         self.cLeft.center = CGPointMake(width * 0.823855, height * 0.485470);
-        self.dDown.center = CGPointMake(width * 0.130727, height * 0.501709);
         self.cDown.center = CGPointMake(width * 0.866509, height * 0.570085);
         self.cUp.center = CGPointMake(width * 0.866904, height * 0.398291);
         self.controlStick.center = CGPointMake(width * 0.214455, height * 0.722222);

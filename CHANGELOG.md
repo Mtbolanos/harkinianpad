@@ -3,7 +3,7 @@
 Versión y build de cada IPA (`version.json`). Los builds intermedios de prueba se compilaron en ramas
 aparte y no se listan.
 
-## 0.5.0 (build 20)
+## 0.5.0 (build 21)
 
 - Los controles táctiles actúan directo sobre el control del jugador 1, con mapeo fijo, en vez de
   escribir teclas: el teclado queda libre y los bindings no los alteran.
@@ -11,6 +11,7 @@ aparte y no se listan.
 - **Touch Camera Stick** (Settings → Controls, apagado por defecto): un segundo stick que actúa como el
   stick derecho, para Free Look. Editable en Customize Touch Layout.
 - **Touch Haptics** (encendido por defecto): vibración suave al presionar un botón táctil.
+- La flecha abajo del d-pad táctil queda simétrica en el layout por defecto del iPhone.
 
 ## 0.4.1 (build 19)
 
