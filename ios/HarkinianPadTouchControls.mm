@@ -1,3 +1,4 @@
+#import <GameController/GameController.h>
 #import <UIKit/UIKit.h>
 
 #include <algorithm>
@@ -13,6 +14,29 @@ static std::atomic_bool sTouchControlsMenuVisible(false);
 static std::atomic_bool sLayoutEditorActive(false);
 static BOOL sLayoutEditorRequested;
 static std::atomic_bool sNativeHudTouchDesired(false);
+static void HarkinianPad_ApplyTouchControlsState(void);
+// A connected game controller hides the touch controls (the menu button stays).
+static std::atomic_bool sGameControllerConnected(false);
+static bool sAutoHideDisabled = false; // UI tests run with the touch controls always available
+
+// Only real gamepads count (a full gamepad profile); other GameController devices do not hide the controls.
+static bool HarkinianPad_GamepadConnected(void) {
+    for (GCController* controller in GCController.controllers) {
+        if (controller.extendedGamepad != nil) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// libultraship's external display support (Extend to External Display).
+extern "C" void* ShipIOS_TouchHostWindow(void);
+extern "C" int LUS_IOSIsExtendedToExternalDisplay(void);
+
+// The game's own HUD can't line up with touch targets while it is drawn on an external display.
+static bool HarkinianPad_NativeHudTouchActive(void) {
+    return sNativeHudTouchDesired.load() && !LUS_IOSIsExtendedToExternalDisplay();
+}
 static std::atomic_bool sNativeHudTouchGameplayActive(false);
 static std::atomic<float> sNativeHudButtonCenters[HARKINIANPAD_HUD_BUTTON_COUNT][2];
 static std::atomic<float> sNativeHudButtonWidths[HARKINIANPAD_HUD_BUTTON_COUNT];
@@ -1115,7 +1139,7 @@ static HarkinianPadTouchButton* sMenuButton;
 
 - (void)applyNativeHudVisualState {
     const BOOL hideUIKitFaceButtons =
-        sTouchControlsDesired.load() && sNativeHudTouchDesired.load() &&
+        sTouchControlsDesired.load() && HarkinianPad_NativeHudTouchActive() &&
         sNativeHudTouchGameplayActive.load() && !sTouchControlsMenuVisible.load() &&
         !sLayoutEditorActive.load();
     for (HarkinianPadTouchButton* button in
@@ -1139,6 +1163,11 @@ static HarkinianPadTouchOverlay* sTouchOverlay;
 static BOOL sLifecycleObserversInstalled;
 
 static UIWindow* HarkinianPad_ActiveWindow(void) {
+    // While the game is on an external display, the controls live on this device's own window.
+    UIWindow* host = (__bridge UIWindow*)ShipIOS_TouchHostWindow();
+    if (host != nil) {
+        return host;
+    }
     for (UIScene* scene in UIApplication.sharedApplication.connectedScenes) {
         if (![scene isKindOfClass:UIWindowScene.class]) {
             continue;
@@ -1201,6 +1230,17 @@ static void HarkinianPad_InstallLifecycleObservers(void) {
     }
     sLifecycleObserversInstalled = YES;
     NSNotificationCenter* notifications = NSNotificationCenter.defaultCenter;
+    sGameControllerConnected.store(HarkinianPad_GamepadConnected());
+    for (NSNotificationName name in @[ GCControllerDidConnectNotification, GCControllerDidDisconnectNotification ]) {
+        [notifications addObserverForName:name
+                                   object:nil
+                                    queue:NSOperationQueue.mainQueue
+                               usingBlock:^(NSNotification* notification) {
+                                   (void)notification;
+                                   sGameControllerConnected.store(HarkinianPad_GamepadConnected());
+                                   HarkinianPad_ApplyTouchControlsState();
+                               }];
+    }
     for (NSNotificationName name in
          @[ UIApplicationWillResignActiveNotification,
             UIApplicationDidEnterBackgroundNotification ]) {
@@ -1225,7 +1265,10 @@ static void HarkinianPad_ApplyTouchControlsState(void) {
     }
 
     HarkinianPad_InstallMenuButton(window);
-    if (!sTouchControlsDesired.load() || sTouchControlsMenuVisible.load()) {
+    const bool hiddenForController =
+        sGameControllerConnected.load() && !sAutoHideDisabled && !sLayoutEditorRequested &&
+        !sLayoutEditorActive.load();
+    if (!sTouchControlsDesired.load() || sTouchControlsMenuVisible.load() || hiddenForController) {
         if (sTouchOverlay.layoutEditing) {
             [sTouchOverlay endLayoutEditing];
         }
@@ -1355,7 +1398,7 @@ void HarkinianPad_SetNativeHudTouchGameplayActive(int active) {
 
 int HarkinianPad_GetNativeHudButtonCenter(int button, float aspectRatio, float* x, float* y) {
     if (button < 0 || button >= HARKINIANPAD_HUD_BUTTON_COUNT || x == nullptr || y == nullptr ||
-        aspectRatio <= 0.0f || !sTouchControlsDesired.load() || !sNativeHudTouchDesired.load() ||
+        aspectRatio <= 0.0f || !sTouchControlsDesired.load() || !HarkinianPad_NativeHudTouchActive() ||
         !sNativeHudTouchGameplayActive.load() || sTouchControlsMenuVisible.load() ||
         sLayoutEditorActive.load()) {
         return 0;
@@ -1376,7 +1419,7 @@ int HarkinianPad_GetNativeHudButtonCenter(int button, float aspectRatio, float* 
 
 float HarkinianPad_GetNativeHudButtonScale(int button, float aspectRatio) {
     if (button < 0 || button >= HARKINIANPAD_HUD_BUTTON_COUNT || aspectRatio <= 0.0f ||
-        !sTouchControlsDesired.load() || !sNativeHudTouchDesired.load() ||
+        !sTouchControlsDesired.load() || !HarkinianPad_NativeHudTouchActive() ||
         !sNativeHudTouchGameplayActive.load() || sTouchControlsMenuVisible.load() ||
         sLayoutEditorActive.load()) {
         return 1.0f;
@@ -1398,13 +1441,23 @@ float HarkinianPad_GetNativeHudButtonScale(int button, float aspectRatio) {
 
 int HarkinianPad_GetNativeHudTouchAlpha(int alpha) {
     const bool nativeTouchArtworkVisible =
-        sTouchControlsDesired.load() && sNativeHudTouchDesired.load() &&
+        sTouchControlsDesired.load() && HarkinianPad_NativeHudTouchActive() &&
         sNativeHudTouchGameplayActive.load() && !sTouchControlsMenuVisible.load() &&
         !sLayoutEditorActive.load();
     if (!nativeTouchArtworkVisible) {
         return std::clamp(alpha, 0, 255);
     }
     return std::clamp(static_cast<int>(alpha * sTouchControlsOpacity.load() + 0.5f), 0, 255);
+}
+
+// libultraship moved the game between this device and an external display.
+extern "C" void ShipIOS_TouchHostChanged(void) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+        HarkinianPad_ApplyTouchControlsState();
+        [sTouchOverlay setNeedsLayout];
+        [sTouchOverlay layoutIfNeeded];
+        [sTouchOverlay applyNativeHudVisualState];
+    });
 }
 
 // libultraship's GUI reports menu visibility through a port-neutral hook.

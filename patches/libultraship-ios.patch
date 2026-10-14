@@ -133,10 +133,10 @@ index deb3e35d..70b39993 100644
      message(STATUS "Successfully patched with ${patch_file}")
  endif()
 diff --git a/cmake/dependencies/ios.cmake b/cmake/dependencies/ios.cmake
-index aad5c586..29ae56f7 100644
+index aad5c586..8842b92e 100644
 --- a/cmake/dependencies/ios.cmake
 +++ b/cmake/dependencies/ios.cmake
-@@ -3,22 +3,58 @@ include(FetchContent)
+@@ -3,22 +3,62 @@ include(FetchContent)
  #=================== SDL2 ===================
  find_package(SDL2 QUIET)
  if (NOT ${SDL2_FOUND})
@@ -173,17 +173,21 @@ index aad5c586..29ae56f7 100644
 +    if (NOT sdl2_orientation_result EQUAL 0)
 +        message(FATAL_ERROR "SDL2 scene orientation patch failed; dependency files were preserved.")
 +    endif()
-+    # Game controllers also arrive as UIKit navigation presses; keep them from becoming keys.
-+    execute_process(
-+        COMMAND ${CMAKE_COMMAND}
-+            -Dpatch_file=${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/patches/sdl2-uikit-controller-presses.patch
-+            -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/git-patch.cmake
-+        WORKING_DIRECTORY ${sdl2_SOURCE_DIR}
-+        RESULT_VARIABLE sdl2_controller_presses_result
-+    )
-+    if (NOT sdl2_controller_presses_result EQUAL 0)
-+        message(FATAL_ERROR "SDL2 controller presses patch failed; dependency files were preserved.")
-+    endif()
++    # controller-presses: game controllers also arrive as UIKit navigation presses; keep them from becoming keys.
++    # Extra patches must not touch the lines of sdl2-uikit-scenes.patch, or its "already applied" check fails
++    # on a reused SDL checkout.
++    foreach(sdl2_extra_patch controller-presses)
++        execute_process(
++            COMMAND ${CMAKE_COMMAND}
++                -Dpatch_file=${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/patches/sdl2-uikit-${sdl2_extra_patch}.patch
++                -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies/git-patch.cmake
++            WORKING_DIRECTORY ${sdl2_SOURCE_DIR}
++            RESULT_VARIABLE sdl2_extra_patch_result
++        )
++        if (NOT sdl2_extra_patch_result EQUAL 0)
++            message(FATAL_ERROR "SDL2 ${sdl2_extra_patch} patch failed; dependency files were preserved.")
++        endif()
++    endforeach()
 +endif()
 +
  #=================== nlohmann-json ===================
@@ -197,7 +201,7 @@ index aad5c586..29ae56f7 100644
          OVERRIDE_FIND_PACKAGE
      )
      FetchContent_MakeAvailable(nlohmann_json)
-@@ -31,7 +67,7 @@ if (NOT ${tinyxml2_FOUND})
+@@ -31,7 +71,7 @@ if (NOT ${tinyxml2_FOUND})
      FetchContent_Declare(
          tinyxml2
          GIT_REPOSITORY https://github.com/leethomason/tinyxml2.git
@@ -206,7 +210,7 @@ index aad5c586..29ae56f7 100644
          OVERRIDE_FIND_PACKAGE
      )
      FetchContent_MakeAvailable(tinyxml2)
-@@ -43,7 +79,7 @@ if (NOT ${spdlog_FOUND})
+@@ -43,7 +83,7 @@ if (NOT ${spdlog_FOUND})
      FetchContent_Declare(
          spdlog
          GIT_REPOSITORY https://github.com/gabime/spdlog.git
@@ -215,7 +219,7 @@ index aad5c586..29ae56f7 100644
          OVERRIDE_FIND_PACKAGE
      )
      FetchContent_MakeAvailable(spdlog)
-@@ -62,7 +98,7 @@ if (NOT ${libzip_FOUND})
+@@ -62,7 +102,7 @@ if (NOT ${libzip_FOUND})
      FetchContent_Declare(
          libzip
          GIT_REPOSITORY https://github.com/nih-at/libzip.git
@@ -224,7 +228,7 @@ index aad5c586..29ae56f7 100644
          OVERRIDE_FIND_PACKAGE
      )
      FetchContent_MakeAvailable(libzip)
-@@ -73,7 +109,7 @@ endif()
+@@ -73,7 +113,7 @@ endif()
  FetchContent_Declare(
      metalcpp
      GIT_REPOSITORY https://github.com/briaguya-ai/single-header-metal-cpp.git
@@ -1029,19 +1033,20 @@ index 00000000..ef23d773
 +} // namespace Ship::IOSTouchScroll
 +#endif
 diff --git a/src/fast/CMakeLists.txt b/src/fast/CMakeLists.txt
-index 66bf70d0..311089f1 100644
+index 66bf70d0..c96c63f6 100644
 --- a/src/fast/CMakeLists.txt
 +++ b/src/fast/CMakeLists.txt
-@@ -41,3 +41,7 @@ endif()
+@@ -41,3 +41,8 @@ endif()
  
  source_group("graphic" FILES ${Source_Files__Graphic})
  target_sources(libultraship PRIVATE ${Source_Files__Graphic})
 +
 +if (CMAKE_SYSTEM_NAME STREQUAL "iOS")
 +    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_display.mm)
++    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_external_display.mm)
 +endif()
 diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
-index 237a502a..30cf577c 100644
+index 237a502a..1fddb5b6 100644
 --- a/src/fast/Fast3dGui.cpp
 +++ b/src/fast/Fast3dGui.cpp
 @@ -12,6 +12,7 @@
@@ -1052,17 +1057,19 @@ index 237a502a..30cf577c 100644
  #include <SDL_video.h>
  #include <imgui_impl_metal.h>
  #include <imgui_impl_sdl2.h>
-@@ -22,6 +23,9 @@
+@@ -22,6 +23,11 @@
  
  #if defined(__ANDROID__) || defined(__IOS__)
  #include "ship/port/mobile/MobileImpl.h"
 +#ifdef __IOS__
 +#include "ship/window/gui/IOSTouchScroll.h"
++extern "C" int LUS_IOSIsExtendedToExternalDisplay(void);
++extern "C" float LUS_IOSDeviceScale(void);
 +#endif
  #endif
  
  #ifdef ENABLE_OPENGL
-@@ -69,7 +73,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
+@@ -69,7 +75,14 @@ void Fast3dGui::HandleWindowEvents(Fast::WindowEvent event) {
      switch (mImpl.Backend) {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
@@ -1077,7 +1084,7 @@ index 237a502a..30cf577c 100644
  #if defined(__ANDROID__) || defined(__IOS__)
              Ship::Mobile::ImGuiProcessEvent(ImGui::GetIO().WantTextInput);
  #endif
-@@ -195,6 +206,45 @@ void Fast3dGui::ImGuiBackendShutdown() {
+@@ -195,6 +208,42 @@ void Fast3dGui::ImGuiBackendShutdown() {
      }
  }
  
@@ -1101,21 +1108,18 @@ index 237a502a..30cf577c 100644
 +    return (float)pixelWidth / (float)windowWidth;
 +}
 +
-+// Rasterize the font atlas at the drawable's pixel density so menus are sharp, while ImGui keeps
-+// laying out in points. Rebuilds the atlas only when fonts are added or the density changes.
-+static void IOSApplyFontDensity(float scale) {
++// Rasterize the font atlas at the device screen's pixel density so menus are sharp, while ImGui keeps
++// laying out in points. The density is fixed (it does not follow an external display) and is only set on
++// sources the atlas has not built yet: rebuilding a built atlas at runtime is unsafe, because the ports'
++// fonts point to resource memory the atlas does not own (FontDataOwnedByAtlas = false).
++static void IOSApplyFontDensity() {
 +    ImGuiIO& io = ImGui::GetIO();
-+    bool changed = false;
-+    for (ImFontConfig& config : io.Fonts->Sources) {
-+        if (config.RasterizerDensity != scale) {
-+            config.RasterizerDensity = scale;
-+            changed = true;
-+        }
++    if (io.Fonts->IsBuilt()) {
++        return;
 +    }
-+    if (changed && io.Fonts->IsBuilt()) {
-+        io.Fonts->ClearTexData();
-+        io.Fonts->Build();
-+        ImGui_ImplMetal_DestroyFontsTexture();
++    const float scale = LUS_IOSDeviceScale();
++    for (ImFontConfig& config : io.Fonts->Sources) {
++        config.RasterizerDensity = scale;
 +    }
 +}
 +#endif
@@ -1123,17 +1127,17 @@ index 237a502a..30cf577c 100644
  void Fast3dGui::ImGuiBackendNewFrame() {
      switch (mImpl.Backend) {
  #ifdef ENABLE_OPENGL
-@@ -211,6 +261,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
+@@ -211,6 +260,9 @@ void Fast3dGui::ImGuiBackendNewFrame() {
  
  #ifdef __APPLE__
          case WindowBackend::FAST3D_SDL_METAL: {
 +#ifdef __IOS__
-+            IOSApplyFontDensity(IOSDrawableScale(mImpl));
++            IOSApplyFontDensity();
 +#endif
              GfxRenderingAPIMetal* api = (GfxRenderingAPIMetal*)mInterpreter.lock()->GetCurrentRenderingAPI();
              api->NewFrame();
              break;
-@@ -226,6 +279,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
+@@ -226,6 +278,13 @@ void Fast3dGui::ImGuiWMNewFrame() {
          case WindowBackend::FAST3D_SDL_OPENGL:
          case WindowBackend::FAST3D_SDL_METAL:
              ImGui_ImplSDL2_NewFrame();
@@ -1147,7 +1151,7 @@ index 237a502a..30cf577c 100644
              break;
  #ifdef ENABLE_DX11
          case WindowBackend::FAST3D_DXGI_DX11:
-@@ -320,8 +380,20 @@ void Fast3dGui::CalculateGameViewport() {
+@@ -320,8 +379,22 @@ void Fast3dGui::CalculateGameViewport() {
      mainPos.y -= mTemporaryWindowPos.y;
      ImVec2 size = ImGui::GetContentRegionAvail();
      const auto interpreter = mInterpreter.lock().get();
@@ -1156,9 +1160,11 @@ index 237a502a..30cf577c 100644
 +    float nativeScaleX = 1.0f;
 +    float nativeScaleY = 1.0f;
 +#ifdef __IOS__
-+    // Opt-in: render the game at the panel's pixel resolution. The viewport is measured in UIKit
-+    // points (a third of the pixels on 3x iPhones), so scale it by the drawable's density.
-+    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0)) {
++    // Render the game at the screen's pixel resolution: opt-in on the device, always on an external display
++    // (whose drawable already matches its output mode). The viewport is measured in UIKit points, so scale
++    // it by the drawable's density.
++    if (Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger("gSettings.IOS.NativeResolution", 0) ||
++        LUS_IOSIsExtendedToExternalDisplay()) {
 +        nativeScaleX = ImGui::GetIO().DisplayFramebufferScale.x;
 +        nativeScaleY = ImGui::GetIO().DisplayFramebufferScale.y;
 +    }
@@ -1208,10 +1214,10 @@ index 2b77a5f2..dc8efeff 100644
  
 diff --git a/src/fast/backends/gfx_ios_display.mm b/src/fast/backends/gfx_ios_display.mm
 new file mode 100644
-index 00000000..66b564ee
+index 00000000..cf00ca6e
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_display.mm
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,47 @@
 +#ifdef __IOS__
 +#import <Foundation/Foundation.h>
 +#import <UIKit/UIKit.h>
@@ -1223,6 +1229,14 @@ index 00000000..66b564ee
 +// CADisableMinimumFrameDurationOnPhone, and Low Power Mode caps every app at 60 Hz. Pacing the game for
 +// 120 Hz while presentation is held at 60 Hz makes each interpolated game tick take twice as long, which
 +// shows up as the game running at half speed with very low effective frame rates.
++extern "C" void* LUS_IOSPresentationScreen(void);
++
++// Pixel density of the device's own screen (3 on most iPhones, 2 on iPads).
++extern "C" float LUS_IOSDeviceScale(void) {
++    const CGFloat scale = UIScreen.mainScreen.nativeScale;
++    return scale > 0.0 ? (float)scale : 1.0f;
++}
++
 +extern "C" int LUS_IOSEffectiveMaxRefreshRate(void) {
 +    static int sPhoneHighRefreshAllowed = -1;
 +    if (sPhoneHighRefreshAllowed < 0) {
@@ -1234,21 +1248,322 @@ index 00000000..66b564ee
 +        sPhoneHighRefreshAllowed = allowed ? 1 : 0;
 +    }
 +
-+    NSInteger panel = UIScreen.mainScreen.maximumFramesPerSecond;
++    // The screen showing the game: the device, or an external display while extended.
++    UIScreen* screen = (__bridge UIScreen*)LUS_IOSPresentationScreen();
++    if (screen == nil) {
++        screen = UIScreen.mainScreen;
++    }
++    NSInteger panel = screen.maximumFramesPerSecond;
 +    if (panel <= 0) {
 +        panel = 60;
 +    }
-+    if (!sPhoneHighRefreshAllowed || NSProcessInfo.processInfo.lowPowerModeEnabled) {
++    // CADisableMinimumFrameDurationOnPhone only concerns the iPhone's own panel.
++    const BOOL phonePanel = screen == UIScreen.mainScreen && !sPhoneHighRefreshAllowed;
++    if (phonePanel || NSProcessInfo.processInfo.lowPowerModeEnabled) {
 +        return (int)MIN(panel, (NSInteger)60);
 +    }
 +    return (int)panel;
 +}
 +#endif
+diff --git a/src/fast/backends/gfx_ios_external_display.mm b/src/fast/backends/gfx_ios_external_display.mm
+new file mode 100644
+index 00000000..972547ec
+--- /dev/null
++++ b/src/fast/backends/gfx_ios_external_display.mm
+@@ -0,0 +1,280 @@
++#ifdef __IOS__
++// External display support for iOS/iPadOS ("Extend to External Display").
++//
++// While a display is connected (HDMI/USB-C or AirPlay) and the setting is on, SDL's whole UIWindow (game and
++// ImGui, which share one Metal surface) moves to the external display's scene. The device keeps a black host
++// window where the port puts its touch controls. When the menu is opened by touch, the surface returns to the
++// device until the menu closes; a menu opened from a controller stays on the external display.
++#import <QuartzCore/QuartzCore.h>
++#import <objc/runtime.h>
++#import <UIKit/UIKit.h>
++#include <SDL.h>
++#include <SDL_syswm.h>
++
++#include "libultraship/bridge/consolevariablebridge.h"
++
++static NSString* const kExtendCVar = @"gSettings.IOS.ExtendExternalDisplay";
++
++// Implemented by each port (touch controls); called when the touch host window changes.
++extern "C" void ShipIOS_TouchHostChanged(void);
++
++// ---------------------------------------------------------------------------------------------------
++// State
++// ---------------------------------------------------------------------------------------------------
++static UIWindowScene* sExternalScene;        // connected external display scene (nil if none)
++static UIWindow* sExternalPlaceholder;        // shown on the external display while the surface is on the device
++static UIWindow* sDeviceHostWindow;           // black device window hosting the touch controls
++static UIWindow* sSDLWindow;                  // SDL's UIWindow
++static UIWindowScene* sDeviceScene;           // SDL's original (application) scene
++static bool sSurfaceOnExternal = false;       // SDL's window currently lives on the external display
++static bool sMenuVisible = false;
++static bool sMenuFromPad = false;
++
++static UIView* FindMetalView(UIView* view) {
++    if ([view.layer isKindOfClass:[CAMetalLayer class]]) {
++        return view;
++    }
++    for (UIView* subview in view.subviews) {
++        UIView* found = FindMetalView(subview);
++        if (found != nil) {
++            return found;
++        }
++    }
++    return nil;
++}
++
++// Pixels per point of a scene's screen. External displays can report scaled point bounds (an iPad on a 4K TV
++// says 3008x1692 points at 2x) while the real output mode is 3840x2160, so derive it from the mode.
++static CGFloat PixelScale(UIWindowScene* scene) {
++    UIScreen* screen = scene.screen;
++    const CGSize bounds = scene.coordinateSpace.bounds.size;
++    const CGSize mode = screen.currentMode.size;
++    const CGFloat boundsLong = MAX(bounds.width, bounds.height);
++    const CGFloat modeLong = MAX(mode.width, mode.height);
++    if (screen != UIScreen.mainScreen && boundsLong > 0.0 && modeLong > 0.0) {
++        return modeLong / boundsLong;
++    }
++    return screen.nativeScale;
++}
++
++static void ApplyMetalScale(UIWindowScene* scene) {
++    UIView* metalView = FindMetalView(sSDLWindow);
++    if (metalView == nil) {
++        return;
++    }
++    // SDL fixes contentsScale at creation from the device screen; the external display has its own scale.
++    metalView.layer.contentsScale = PixelScale(scene);
++    [metalView setNeedsLayout];
++    [sSDLWindow setNeedsLayout];
++    [sSDLWindow layoutIfNeeded];
++}
++
++@interface LUSExternalDisplayViewController : UIViewController
++@property(nonatomic, copy) NSString* message;
++@property(nonatomic, copy) NSString* symbol;
++@end
++
++@implementation LUSExternalDisplayViewController
++- (void)viewDidLoad {
++    [super viewDidLoad];
++    self.view.backgroundColor = UIColor.blackColor;
++    // Dim icon and caption, as other apps show while their content is on another screen.
++    UIColor* tint = [UIColor colorWithWhite:1.0 alpha:0.35];
++    UIImageSymbolConfiguration* config = [UIImageSymbolConfiguration configurationWithPointSize:56.0
++                                                                                         weight:UIImageSymbolWeightLight];
++    UIImageView* icon = [[UIImageView alloc] initWithImage:[UIImage systemImageNamed:self.symbol ?: @"tv"
++                                                                   withConfiguration:config]];
++    icon.tintColor = tint;
++    UILabel* label = [[UILabel alloc] initWithFrame:CGRectZero];
++    label.text = self.message;
++    label.textColor = tint;
++    label.font = [UIFont systemFontOfSize:15.0 weight:UIFontWeightMedium];
++    label.textAlignment = NSTextAlignmentCenter;
++    UIStackView* stack = [[UIStackView alloc] initWithArrangedSubviews:@[ icon, label ]];
++    stack.axis = UILayoutConstraintAxisVertical;
++    stack.alignment = UIStackViewAlignmentCenter;
++    stack.spacing = 12.0;
++    stack.translatesAutoresizingMaskIntoConstraints = NO;
++    [self.view addSubview:stack];
++    [NSLayoutConstraint activateConstraints:@[
++        [stack.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor],
++        [stack.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor],
++    ]];
++}
++- (BOOL)prefersStatusBarHidden {
++    return YES;
++}
++- (BOOL)prefersHomeIndicatorAutoHidden {
++    return YES;
++}
++- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
++    return UIInterfaceOrientationMaskLandscape;
++}
++@end
++
++static UIWindow* MakeWindow(UIWindowScene* scene, NSString* symbol, NSString* message) {
++    UIWindow* window = [[UIWindow alloc] initWithWindowScene:scene];
++    window.frame = scene.coordinateSpace.bounds;
++    LUSExternalDisplayViewController* controller = [[LUSExternalDisplayViewController alloc] init];
++    controller.message = message;
++    controller.symbol = symbol;
++    window.rootViewController = controller;
++    window.backgroundColor = UIColor.blackColor;
++    return window;
++}
++
++static bool ExtendEnabled(void) {
++    return CVarGetInteger(kExtendCVar.UTF8String, 1) != 0;
++}
++
++// Where SDL's surface should be right now.
++static bool WantSurfaceOnExternal(void) {
++    if (sExternalScene == nil || sSDLWindow == nil || !ExtendEnabled()) {
++        return false;
++    }
++    // A menu opened by touch is used on the device.
++    if (sMenuVisible && !sMenuFromPad) {
++        return false;
++    }
++    return true;
++}
++
++static void MoveSurface(bool toExternal) {
++    if (toExternal == sSurfaceOnExternal) {
++        return;
++    }
++    if (toExternal) {
++        if (sDeviceScene == nil) {
++            sDeviceScene = sSDLWindow.windowScene;
++        }
++        if (sDeviceHostWindow == nil) {
++            sDeviceHostWindow = MakeWindow(sDeviceScene, @"tv", @"Playing on the external display");
++        }
++        sExternalPlaceholder.hidden = YES;
++        sSDLWindow.windowScene = sExternalScene;
++        sSDLWindow.frame = sExternalScene.coordinateSpace.bounds;
++        sSDLWindow.hidden = NO;
++        ApplyMetalScale(sExternalScene);
++        [sDeviceHostWindow makeKeyAndVisible];
++    } else {
++        UIWindowScene* deviceScene = sDeviceScene ?: sSDLWindow.windowScene;
++        sSDLWindow.windowScene = deviceScene;
++        sSDLWindow.frame = deviceScene.coordinateSpace.bounds;
++        ApplyMetalScale(deviceScene);
++        sDeviceHostWindow.hidden = YES;
++        [sSDLWindow makeKeyAndVisible];
++        if (sExternalScene != nil) {
++            if (sExternalPlaceholder == nil) {
++                sExternalPlaceholder = MakeWindow(sExternalScene, UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPad ? @"ipad.landscape" : @"iphone.gen3.landscape", @"Menu open on the device");
++            }
++            sExternalPlaceholder.hidden = !ExtendEnabled();
++        }
++    }
++    sSurfaceOnExternal = toExternal;
++    ShipIOS_TouchHostChanged();
++}
++
++static void Update(void) {
++    if (sSDLWindow == nil) {
++        return;
++    }
++    MoveSurface(WantSurfaceOnExternal());
++    if (!sSurfaceOnExternal && sExternalPlaceholder != nil) {
++        // Placeholder only while a display is connected and extending; otherwise leave the display alone.
++        sExternalPlaceholder.hidden = sExternalScene == nil || !ExtendEnabled();
++    }
++}
++
++// ---------------------------------------------------------------------------------------------------
++// Scene delegate for external display sessions. SDL's application delegate configures only the application
++// scene; at load time we wrap its configuration method so non-application sessions (external displays) get
++// this delegate. Done at runtime to keep SDL's scene patch untouched.
++// ---------------------------------------------------------------------------------------------------
++@interface LUSExternalDisplaySceneDelegate : NSObject <UIWindowSceneDelegate>
++@end
++
++@implementation LUSExternalDisplaySceneDelegate
+++ (void)load {
++    Class sdlDelegate = NSClassFromString(@"SDLUIKitDelegate");
++    SEL selector = @selector(application:configurationForConnectingSceneSession:options:);
++    Method method = sdlDelegate != Nil ? class_getInstanceMethod(sdlDelegate, selector) : NULL;
++    if (method == NULL) {
++        return;
++    }
++    typedef UISceneConfiguration* (*ConfigureFn)(id, SEL, UIApplication*, UISceneSession*, UISceneConnectionOptions*);
++    ConfigureFn original = (ConfigureFn)method_getImplementation(method);
++    Class external = self;
++    method_setImplementation(method, imp_implementationWithBlock(^UISceneConfiguration*(
++                                         id delegate, UIApplication* application, UISceneSession* session,
++                                         UISceneConnectionOptions* options) {
++                                 UISceneConfiguration* config =
++                                     original(delegate, selector, application, session, options);
++                                 if (![session.role isEqualToString:UIWindowSceneSessionRoleApplication]) {
++                                     config.delegateClass = external;
++                                 }
++                                 return config;
++                             }));
++}
++
++- (void)scene:(UIScene*)scene willConnectToSession:(UISceneSession*)session options:(UISceneConnectionOptions*)options {
++    if (![scene isKindOfClass:[UIWindowScene class]]) {
++        return;
++    }
++    sExternalScene = (UIWindowScene*)scene;
++    Update();
++}
++
++- (void)sceneDidDisconnect:(UIScene*)scene {
++    if (scene != sExternalScene) {
++        return;
++    }
++    sExternalScene = nil;
++    sExternalPlaceholder.hidden = YES;
++    sExternalPlaceholder = nil;
++    Update();
++}
++@end
++
++// ---------------------------------------------------------------------------------------------------
++// C entry points
++// ---------------------------------------------------------------------------------------------------
++extern "C" void LUS_IOSExternalDisplayAttachWindow(void* uiWindow) {
++    sSDLWindow = (__bridge UIWindow*)uiWindow;
++    sDeviceScene = sSDLWindow.windowScene;
++    Update();
++}
++
++// Called once per frame from the main loop: applies the setting and menu state.
++extern "C" void LUS_IOSExternalDisplayUpdate(void) {
++    Update();
++}
++
++// Called by the GUI with the menu state and whether a controller opened it.
++extern "C" void LUS_IOSExternalDisplaySetMenu(int visible, int fromPad) {
++    sMenuVisible = visible != 0;
++    if (visible) {
++        sMenuFromPad = fromPad != 0;
++    }
++}
++
++// True while the game is shown on an external display (device-only settings do not apply then).
++extern "C" int LUS_IOSIsExtendedToExternalDisplay(void) {
++    return sSurfaceOnExternal ? 1 : 0;
++}
++
++// True while an external display is connected and Extend is on (the menu may be on the device meanwhile).
++extern "C" int LUS_IOSExternalDisplayActive(void) {
++    return (sExternalScene != nil && ExtendEnabled()) ? 1 : 0;
++}
++
++// The device window that hosts touch controls while extended, or NULL to use the normal window.
++extern "C" void* ShipIOS_TouchHostWindow(void) {
++    return sSurfaceOnExternal ? (__bridge void*)sDeviceHostWindow : NULL;
++}
++
++// The screen whose refresh rate paces the game.
++extern "C" void* LUS_IOSPresentationScreen(void) {
++    return (__bridge void*)((sSurfaceOnExternal && sExternalScene != nil) ? sExternalScene.screen
++                                                                           : UIScreen.mainScreen);
++}
++#endif
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
-index 00eaedbc..97cbb8ea 100644
+index 00eaedbc..3da4de52 100644
 --- a/src/fast/backends/gfx_metal.cpp
 +++ b/src/fast/backends/gfx_metal.cpp
-@@ -45,6 +45,18 @@
+@@ -16,6 +16,7 @@
+ #include <time.h>
+ #include <math.h>
+ #include <cmath>
++#include <cstdlib>
+ #include <stddef.h>
+ 
+ #ifndef _LANGUAGE_C
+@@ -45,6 +46,18 @@
  // MARK: - Helpers
  namespace Fast {
  
@@ -1267,7 +1582,28 @@ index 00eaedbc..97cbb8ea 100644
  static MTL::SamplerAddressMode gfx_cm_to_metal(uint32_t val) {
      switch (val) {
          case G_TX_NOMIRROR | G_TX_CLAMP:
-@@ -454,20 +466,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
+@@ -118,10 +131,20 @@ void GfxRenderingAPIMetal::RenderDrawData(ImDrawData* drawData) {
+ 
+     // Workaround for detecting when transitioning to/from full screen mode.
+     MTL::Texture* screen_texture = mTextures[framebuffer.mTextureId].texture;
++#ifdef __IOS__
++    // Round, and allow a pixel of slack: external displays can have non-integer point scales (an iPad on a
++    // 4K TV is 3840 / 3008 = 1.2766x), where truncation is one pixel short and nothing would be drawn.
++    const long fb_width = std::lround(drawData->DisplaySize.x * drawData->FramebufferScale.x);
++    const long fb_height = std::lround(drawData->DisplaySize.y * drawData->FramebufferScale.y);
++    if (std::labs((long)screen_texture->width() - fb_width) > 1 ||
++        std::labs((long)screen_texture->height() - fb_height) > 1)
++        return;
++#else
+     int fb_width = (int)(drawData->DisplaySize.x * drawData->FramebufferScale.x);
+     int fb_height = (int)(drawData->DisplaySize.y * drawData->FramebufferScale.y);
+     if (screen_texture->width() != fb_width || screen_texture->height() != fb_height)
+         return;
++#endif
+ 
+     ImGui_ImplMetal_RenderDrawData(drawData, framebuffer.mCommandBuffer, framebuffer.mCommandEncoder);
+ }
+@@ -454,20 +477,23 @@ void GfxRenderingAPIMetal::DrawTriangles(float buf_vbo[], size_t buf_vbo_len, si
      auto& current_framebuffer = mFramebuffers[mCurrentFramebuffer];
  
      if (current_framebuffer.mLastDepthTest != mCurrentDepthTest ||
@@ -1302,7 +1638,7 @@ index 00eaedbc..97cbb8ea 100644
  
      if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index 15c5415f..b7682314 100644
+index 15c5415f..53a741e5 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
 @@ -11,6 +11,11 @@
@@ -1317,7 +1653,18 @@ index 15c5415f..b7682314 100644
  #include "ship/config/ConsoleVariable.h"
  #include "ship/controller/controldeck/ControlDeck.h"
  #include "ship/window/FileDropMgr.h"
-@@ -53,6 +58,25 @@ LONG_PTR SDL_WndProc;
+@@ -39,6 +44,10 @@
+ #include "ship/window/gui/Gui.h"
+ #include "fast/Fast3dGui.h"
+ 
++#ifdef __IOS__
++#include <SDL_syswm.h>
++#endif
++
+ #ifdef _WIN32
+ #include <WTypesbase.h>
+ #include <Windows.h>
+@@ -53,6 +62,25 @@ LONG_PTR SDL_WndProc;
  #endif
  
  namespace Fast {
@@ -1343,7 +1690,7 @@ index 15c5415f..b7682314 100644
  const SDL_Scancode lus_to_sdl_table[] = {
      SDL_SCANCODE_UNKNOWN,
      SDL_SCANCODE_ESCAPE,
-@@ -215,6 +239,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
+@@ -215,6 +243,16 @@ GfxWindowBackendSDL2::~GfxWindowBackendSDL2() {
  }
  
  void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
@@ -1360,7 +1707,7 @@ index 15c5415f..b7682314 100644
      if (mFullScreen == on) {
          return;
      }
-@@ -235,7 +269,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -235,7 +273,7 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
          }
      }
  
@@ -1369,12 +1716,14 @@ index 15c5415f..b7682314 100644
      // Implement fullscreening with native macOS APIs
      if (on != isNativeMacOSFullscreenActive(mWnd)) {
          toggleNativeMacOSFullscreen(mWnd);
-@@ -273,7 +307,16 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
+@@ -273,7 +311,18 @@ void GfxWindowBackendSDL2::SetFullscreenImpl(bool on, bool call_callback) {
      }
  }
  
 +#ifdef __IOS__
 +extern "C" int LUS_IOSEffectiveMaxRefreshRate(void);
++extern "C" void LUS_IOSExternalDisplayAttachWindow(void* uiWindow);
++extern "C" void LUS_IOSExternalDisplayUpdate(void);
 +#endif
 +
  void GfxWindowBackendSDL2::GetActiveWindowRefreshRate(uint32_t* refresh_rate) {
@@ -1386,7 +1735,7 @@ index 15c5415f..b7682314 100644
      int display_in_use = SDL_GetWindowDisplayIndex(mWnd);
  
      SDL_DisplayMode mode;
-@@ -374,7 +417,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -374,7 +423,10 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
      int len = snprintf(title, sizeof(title), "%s (%s)", gameName, gfxApiName);
  
  #ifdef __IOS__
@@ -1398,7 +1747,23 @@ index 15c5415f..b7682314 100644
  #else
      Uint32 flags = SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
  #endif
-@@ -434,6 +480,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+@@ -386,6 +438,15 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
+     }
+ 
+     mWnd = SDL_CreateWindow(title, posX, posY, mWindowWidth, mWindowHeight, flags);
++#ifdef __IOS__
++    if (mWnd != nullptr) {
++        SDL_SysWMinfo iosWmInfo;
++        SDL_VERSION(&iosWmInfo.version);
++        if (SDL_GetWindowWMInfo(mWnd, &iosWmInfo) && iosWmInfo.subsystem == SDL_SYSWM_UIKIT) {
++            LUS_IOSExternalDisplayAttachWindow((void*)iosWmInfo.info.uikit.window);
++        }
++    }
++#endif
+ #ifdef _WIN32
+     // Get Windows window handle and use it to subclass the window procedure.
+     // Needed to circumvent SDLs DPI scaling problems under windows (original does only scale *sometimes*).
+@@ -434,6 +495,13 @@ void GfxWindowBackendSDL2::Init(const char* gameName, const char* gfxApiName, bo
          }
  
          SDL_GetRendererOutputSize(mRenderer, &mWindowWidth, &mWindowHeight);
@@ -1412,7 +1777,7 @@ index 15c5415f..b7682314 100644
          window_impl.Metal = { mWnd, mRenderer };
          window_impl.Backend = WindowBackend::FAST3D_SDL_METAL;
      }
-@@ -626,9 +679,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -626,9 +694,19 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
              OnKeyup(event.key.keysym.scancode);
              break;
          case SDL_MOUSEBUTTONDOWN:
@@ -1432,7 +1797,7 @@ index 15c5415f..b7682314 100644
              OnMouseButtonUp(event.button.button - 1);
              break;
          case SDL_MOUSEWHEEL:
-@@ -657,6 +720,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+@@ -657,6 +735,36 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
          case SDL_DROPFILE:
              Ship::Context::GetRawInstance()->GetFileDropMgr()->SetDroppedFile(event.drop.file);
              break;
@@ -1469,7 +1834,15 @@ index 15c5415f..b7682314 100644
          case SDL_QUIT:
              Close();
              break;
-@@ -669,12 +762,12 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -664,17 +772,20 @@ void GfxWindowBackendSDL2::HandleSingleEvent(SDL_Event& event) {
+ }
+ 
+ void GfxWindowBackendSDL2::HandleEvents() {
++#ifdef __IOS__
++    LUS_IOSExternalDisplayUpdate();
++#endif
+     SDL_Event event;
+     SDL_PumpEvents();
      while (SDL_PeepEvents(&event, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_CONTROLLERDEVICEADDED - 1) > 0) {
          HandleSingleEvent(event);
      }
@@ -1484,7 +1857,7 @@ index 15c5415f..b7682314 100644
      auto nextFullscreenState = isNativeMacOSFullscreenActive(mWnd);
      if (mFullScreen != nextFullscreenState) {
          mFullScreen = nextFullscreenState;
-@@ -686,7 +779,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
+@@ -686,7 +797,11 @@ void GfxWindowBackendSDL2::HandleEvents() {
  }
  
  bool GfxWindowBackendSDL2::IsFrameReady() {
@@ -1496,7 +1869,7 @@ index 15c5415f..b7682314 100644
  }
  
  static uint64_t qpc_to_100ns(uint64_t qpc) {
-@@ -774,7 +871,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
+@@ -774,7 +889,12 @@ const char* GfxWindowBackendSDL2::GetKeyName(int scancode) {
  }
  
  bool GfxWindowBackendSDL2::CanDisableVsync() {
@@ -2187,10 +2560,10 @@ index eaea3cd7..5bc888a9 100644
              const float textWidth = GetStringWidth(overlay.Value.c_str());
              const float textOffset = 40.0f;
 diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
-index 1f9279bd..43defe56 100644
+index 1f9279bd..3761be17 100644
 --- a/src/ship/window/gui/Gui.cpp
 +++ b/src/ship/window/gui/Gui.cpp
-@@ -7,6 +7,12 @@
+@@ -7,6 +7,14 @@
  #include <string>
  #include <vector>
  
@@ -2198,12 +2571,14 @@ index 1f9279bd..43defe56 100644
 +#include <SDL2/SDL.h>
 +#include "ship/window/gui/IOSTouchScroll.h"
 +extern "C" void ShipIOS_SetTouchControlsMenuVisible(int visible);
++extern "C" void LUS_IOSExternalDisplaySetMenu(int visible, int fromPad);
++static bool sIOSMenuOpenedFromPad = false;
 +#endif
 +
  #include "ship/config/Config.h"
  #include "ship/Context.h"
  #include "ship/config/ConsoleVariable.h"
-@@ -79,9 +85,19 @@ void Gui::Init() {
+@@ -79,9 +87,19 @@ void Gui::Init() {
                                                            &iconsConfig, sIconsRanges);
  
  #if defined(__ANDROID__)
@@ -2224,18 +2599,30 @@ index 1f9279bd..43defe56 100644
  #endif
  
      mImGuiIniPath = Context::GetPathRelativeToAppDirectory("imgui.ini");
-@@ -262,6 +278,10 @@ void Gui::DrawMenu() {
+@@ -229,6 +247,10 @@ void Gui::DrawMenu() {
+     if (ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(ImGuiKey_Escape, false) ||
+         (ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false) &&
+          Ship::Context::GetRawInstance()->GetConsoleVariables()->GetInteger(CVAR_IMGUI_CONTROLLER_NAV, 0))) {
++#ifdef __IOS__
++        // An external display shows a controller-opened menu with the game; a touch-opened one moves to the device.
++        sIOSMenuOpenedFromPad = ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false);
++#endif
+         if ((ImGui::IsKeyPressed(ImGuiKey_Escape, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) && GetMenu()) {
+             GetMenu()->ToggleVisibility();
+         } else if ((ImGui::IsKeyPressed(TOGGLE_BTN, false) || ImGui::IsKeyPressed(TOGGLE_PAD_BTN, false)) &&
+@@ -262,6 +284,11 @@ void Gui::DrawMenu() {
          GetMenu()->Draw();
      }
  
 +#ifdef __IOS__
 +    ShipIOS_SetTouchControlsMenuVisible(GetMenuOrMenubarVisible());
++    LUS_IOSExternalDisplaySetMenu(GetMenuOrMenubarVisible(), sIOSMenuOpenedFromPad);
 +#endif
 +
      for (auto& windowIter : mGuiWindows) {
          windowIter.second->Update();
          windowIter.second->Draw();
-@@ -288,7 +308,13 @@ void Gui::StartFrame() {
+@@ -288,7 +315,13 @@ void Gui::StartFrame() {
      HandleMouseCapture();
      ImGuiBackendNewFrame();
      ImGuiWMNewFrame();
