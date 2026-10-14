@@ -94,6 +94,8 @@ Con **Extend to External Display** activado (viene así por defecto, en
 - Los controles táctiles del juego no pasan por este filtro.
 
 <a id="get-started"></a>
+El historial de versiones está en [`CHANGELOG.md`](CHANGELOG.md).
+
 ## Cómo compilarlo
 
 Este repositorio no publica apps compiladas. Cada quien
