@@ -82,6 +82,9 @@ static bool HarkinianPad_NativeHudTouchActive(void) {
 static std::atomic_bool sNativeHudTouchGameplayActive(false);
 // The game's ocarina/instrument is out: the game hides the face buttons then, so the normal touch buttons are shown.
 static std::atomic_bool sInstrumentActive(false);
+// The overlay is on screen (enabled, not auto-hidden for a controller, not hidden for the menu). Only then does the
+// game place and fade its A/B/C artwork for the touch layout.
+static std::atomic_bool sTouchOverlayShown(false);
 static std::atomic<float> sNativeHudButtonCenters[HARKINIANPAD_HUD_BUTTON_COUNT][2];
 static std::atomic<float> sNativeHudButtonWidths[HARKINIANPAD_HUD_BUTTON_COUNT];
 
@@ -1377,6 +1380,7 @@ static void HarkinianPad_ApplyTouchControlsState(void) {
         [sTouchOverlay cancelAllInputs];
         [sTouchOverlay removeFromSuperview];
         sTouchOverlay = nil;
+        sTouchOverlayShown.store(false);
         if (!sTouchControlsDesired.load()) {
             sLayoutEditorRequested = NO;
         }
@@ -1400,6 +1404,7 @@ static void HarkinianPad_ApplyTouchControlsState(void) {
         [sTouchOverlay beginLayoutEditing];
     }
     [sTouchOverlay applyNativeHudVisualState];
+    sTouchOverlayShown.store(true);
     [window bringSubviewToFront:sTouchOverlay];
     if (!sLayoutEditorActive.load()) {
         [window bringSubviewToFront:sMenuButton];
@@ -1532,7 +1537,7 @@ void HarkinianPad_SetNativeHudTouchGameplayActive(int active) {
 
 int HarkinianPad_GetNativeHudButtonCenter(int button, float aspectRatio, float* x, float* y) {
     if (button < 0 || button >= HARKINIANPAD_HUD_BUTTON_COUNT || x == nullptr || y == nullptr ||
-        aspectRatio <= 0.0f || !sTouchControlsDesired.load() || !HarkinianPad_NativeHudTouchActive() ||
+        aspectRatio <= 0.0f || !sTouchOverlayShown.load() || !HarkinianPad_NativeHudTouchActive() ||
         !sNativeHudTouchGameplayActive.load() || sTouchControlsMenuVisible.load() ||
         sLayoutEditorActive.load()) {
         return 0;
@@ -1553,7 +1558,7 @@ int HarkinianPad_GetNativeHudButtonCenter(int button, float aspectRatio, float* 
 
 float HarkinianPad_GetNativeHudButtonScale(int button, float aspectRatio) {
     if (button < 0 || button >= HARKINIANPAD_HUD_BUTTON_COUNT || aspectRatio <= 0.0f ||
-        !sTouchControlsDesired.load() || !HarkinianPad_NativeHudTouchActive() ||
+        !sTouchOverlayShown.load() || !HarkinianPad_NativeHudTouchActive() ||
         !sNativeHudTouchGameplayActive.load() || sTouchControlsMenuVisible.load() ||
         sLayoutEditorActive.load()) {
         return 1.0f;
@@ -1575,7 +1580,7 @@ float HarkinianPad_GetNativeHudButtonScale(int button, float aspectRatio) {
 
 int HarkinianPad_GetNativeHudTouchAlpha(int alpha) {
     const bool nativeTouchArtworkVisible =
-        sTouchControlsDesired.load() && HarkinianPad_NativeHudTouchActive() &&
+        sTouchOverlayShown.load() && HarkinianPad_NativeHudTouchActive() &&
         sNativeHudTouchGameplayActive.load() && !sTouchControlsMenuVisible.load() &&
         !sLayoutEditorActive.load();
     if (!nativeTouchArtworkVisible) {

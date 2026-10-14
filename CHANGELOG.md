@@ -8,6 +8,8 @@ aparte y no se listan.
 - **Import JSON from Files** (menú Randomizer, junto a Spoiler File, y Network → Anchor): carga el spoiler
   del randomizer que comparte el host para Anchor, o una configuración compartida, igual que soltar el
   archivo en la ventana en escritorio.
+- Con un mando conectado, los botones A, B y C del juego vuelven a su posición, tamaño y opacidad
+  originales aunque los controles táctiles dinámicos estén activos (antes quedaban en el layout táctil).
 
 ## 0.5.1 (build 22)
 
