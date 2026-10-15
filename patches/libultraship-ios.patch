@@ -2738,10 +2738,10 @@ index 1f9279bd..3761be17 100644
  void Gui::EndFrame() {
 diff --git a/src/ship/window/gui/IOSTouchScroll.cpp b/src/ship/window/gui/IOSTouchScroll.cpp
 new file mode 100644
-index 00000000..660de942
+index 00000000..2548712f
 --- /dev/null
 +++ b/src/ship/window/gui/IOSTouchScroll.cpp
-@@ -0,0 +1,245 @@
+@@ -0,0 +1,359 @@
 +#ifdef __IOS__
 +#include "ship/window/gui/IOSTouchScroll.h"
 +
@@ -2754,13 +2754,14 @@ index 00000000..660de942
 +namespace Ship::IOSTouchScroll {
 +
 +namespace {
-+enum class State { Idle, Pending, Scrolling, Delivered };
++enum class State { Idle, Pending, Scrolling, Arming, Delivered };
 +
 +constexpr float kStartThreshold = 10.0f;      // vertical travel (points) before a touch counts as a scroll
 +constexpr float kHorizontalThreshold = 14.0f; // horizontal travel (points) before a touch goes to a slider
 +constexpr float kHorizontalRatio = 2.0f;      // a drag must be this many times wider than tall to be sideways
 +constexpr float kMinGlideSpeed = 30.0f;       // points per second
 +constexpr Uint32 kHoverDelayMs = 150;         // a still finger then hovers (tooltips) without pressing
++constexpr Uint32 kResizeArmMs = 80;           // ImGui only grabs a window edge after it has been hovered ~40 ms
 +
 +State sState = State::Idle;
 +SDL_Event sPress = {};
@@ -2774,14 +2775,80 @@ index 00000000..660de942
 +bool sGliding = false;
 +float sVelocity = 0.0f;
 +bool (*sForward)(const SDL_Event*) = nullptr;
++SDL_Event sArmMotion = {};                        // latest finger position while arming a resize
++bool sArmMoved = false;
++int sArmFrames = 0;                               // frames ImGui has seen the hover while arming
 +
 +ImGuiWindow* FindScrollable(ImGuiWindow* window, int axis) {
 +    for (; window != nullptr; window = window->ParentWindow) {
 +        if (window->ScrollMax[axis] > 0.0f && !(window->Flags & ImGuiWindowFlags_NoScrollWithMouse)) {
 +            return window;
 +        }
++        // Stop at the top of this window: a popup's (or floating window's) parent is the window that opened
++        // it, and a drag inside a color picker popup must not scroll the menu behind it.
++        if (!(window->Flags & ImGuiWindowFlags_ChildWindow) || (window->Flags & ImGuiWindowFlags_Popup)) {
++            break;
++        }
 +    }
 +    return nullptr;
++}
++
++ImGuiWindow* HoveredWindowAt(float x, float y) {
++    if (ImGui::GetCurrentContext() == nullptr) {
++        return nullptr;
++    }
++    ImGuiWindow* hovered = nullptr;
++    ImGuiWindow* underMoving = nullptr;
++    ImGui::FindHoveredWindowEx(ImVec2(x, y), false, &hovered, &underMoving);
++    return hovered;
++}
++
++// Mirrors ImGui::UpdateWindowManualResize() (imgui.cpp, v1.91.9): the resize grips (lower-right, plus lower-left
++// when resizing from edges is on) and, with io.ConfigWindowsResizeFromEdges, the four borders.
++bool IsOverResizeArea(float x, float y) {
++    ImGuiWindow* hovered = HoveredWindowAt(x, y);
++    if (hovered == nullptr) {
++        return false;
++    }
++    ImGuiWindow* window = hovered->RootWindow;
++    const ImGuiWindowFlags flags = window->Flags;
++    if ((flags & (ImGuiWindowFlags_NoResize | ImGuiWindowFlags_AlwaysAutoResize)) || window->Collapsed ||
++        window->DockIsActive || !window->WasActive || ((flags & ImGuiWindowFlags_ChildWindow) && !(flags & ImGuiWindowFlags_Popup))) {
++        return false;
++    }
++    ImGuiContext& g = *ImGui::GetCurrentContext();
++    const ImVec2 point(x, y);
++    const bool fromEdges = g.IO.ConfigWindowsResizeFromEdges;
++    const float fontSize = window->FontRefSize > 0.0f ? window->FontRefSize : g.FontSize;
++    const float gripDraw = IM_TRUNC(ImMax(fontSize * 1.35f, window->WindowRounding + 1.0f + fontSize * 0.2f));
++    const float gripInner = IM_TRUNC(gripDraw * 0.75f);
++    const float outer = g.WindowsBorderHoverPadding;
++    const ImVec2 min = window->Pos;
++    const ImVec2 max = window->Pos + window->Size;
++
++    // Lower-right grip, then lower-left (only when resizing from edges).
++    ImRect lowerRight(ImVec2(max.x - gripInner, max.y - gripInner), ImVec2(max.x + outer, max.y + outer));
++    if (lowerRight.Contains(point)) {
++        return true;
++    }
++    if (fromEdges) {
++        ImRect lowerLeft(ImVec2(min.x - outer, max.y - gripInner), ImVec2(min.x + gripInner, max.y + outer));
++        if (lowerLeft.Contains(point)) {
++            return true;
++        }
++        const ImRect borders[4] = {
++            ImRect(min.x - outer, min.y + gripInner, min.x + outer, max.y - gripInner), // left
++            ImRect(max.x - outer, min.y + gripInner, max.x + outer, max.y - gripInner), // right
++            ImRect(min.x + gripInner, min.y - outer, max.x - gripInner, min.y + outer), // top
++            ImRect(min.x + gripInner, max.y - outer, max.x - gripInner, max.y + outer), // bottom
++        };
++        for (const ImRect& border : borders) {
++            if (border.Contains(point)) {
++                return true;
++            }
++        }
++    }
++    return false;
 +}
 +
 +// NewFrame() clears Active until each window's Begin() runs again; WasActive is last frame's state.
@@ -2864,14 +2931,30 @@ index 00000000..660de942
 +                sGliding = false;
 +                return false;
 +            }
++            if (IsOverResizeArea((float)event->button.x, (float)event->button.y)) {
++                // Window edge or resize grip: hover there first (ImGui ignores an edge that was not hovered for
++                // a moment), then press; the drag goes to ImGui in any direction.
++                sState = State::Arming;
++                sPress = *event;
++                sAxis = -1;
++                sGliding = false;
++                sArmMoved = false;
++                sArmFrames = 0;
++                DeliverHover(forward);
++                return true;
++            }
 +            sState = State::Pending;
 +            sPress = *event;
 +            sStartX = (float)event->button.x;
 +            sStartY = (float)event->button.y;
 +            sAxis = -1;
 +            sPendingDelta[0] = sPendingDelta[1] = 0.0f;
-+            sTarget[0] = sTarget[1] = nullptr;
-+            sTargetsKnown = false;
++            {
++                ImGuiWindow* hovered = HoveredWindowAt(sStartX, sStartY);
++                sTarget[0] = FindScrollable(hovered, 0);
++                sTarget[1] = FindScrollable(hovered, 1);
++                sTargetsKnown = hovered != nullptr;
++            }
 +            sHovered = false;
 +            sGliding = false;
 +            sVelocity = 0.0f;
@@ -2894,10 +2977,22 @@ index 00000000..660de942
 +                        sState = State::Delivered;
 +                    }
 +                } else if (std::fabs(dy) > kStartThreshold) {
-+                    sState = State::Scrolling;
-+                    sAxis = 1;
-+                    sPendingDelta[1] += -dy;
++                    if (sTargetsKnown && sTarget[1] == nullptr) {
++                        // Nothing scrolls vertically here (e.g. a color picker popup): the drag is the widget's.
++                        DeliverPress(forward);
++                        forward(event);
++                        sState = State::Delivered;
++                    } else {
++                        sState = State::Scrolling;
++                        sAxis = 1;
++                        sPendingDelta[1] += -dy;
++                    }
 +                }
++                return true;
++            }
++            if (sState == State::Arming) {
++                sArmMotion = *event;
++                sArmMoved = true;
 +                return true;
 +            }
 +            if (sState == State::Scrolling) {
@@ -2907,6 +3002,15 @@ index 00000000..660de942
 +            return false;
 +
 +        case SDL_MOUSEBUTTONUP:
++            if (sState == State::Arming) {
++                DeliverPress(forward);
++                if (sArmMoved) {
++                    forward(&sArmMotion);
++                }
++                forward(event);
++                sState = State::Idle;
++                return true;
++            }
 +            if (sState == State::Pending) {
 +                // A tap: deliver the held press, then the release.
 +                DeliverPress(forward);
@@ -2929,6 +3033,16 @@ index 00000000..660de942
 +
 +void UpdateFrame() {
 +    ImGuiIO& io = ImGui::GetIO();
++
++    // Both a minimum time and a few frames, so the edge counts as hovered even at low frame rates.
++    if (sState == State::Arming && sForward != nullptr && ++sArmFrames >= 3 &&
++        SDL_TICKS_PASSED(SDL_GetTicks(), sPress.button.timestamp + kResizeArmMs)) {
++        DeliverPress(sForward);
++        if (sArmMoved) {
++            sForward(&sArmMotion);
++        }
++        sState = State::Delivered;
++    }
 +
 +    // A finger held still only hovers: tooltips and highlights show, but nothing is pressed until it lifts.
 +    if (sState == State::Pending && !sHovered && sForward != nullptr &&

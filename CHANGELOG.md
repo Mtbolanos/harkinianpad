@@ -3,6 +3,14 @@
 Versión y build de cada IPA (`version.json`). Los builds intermedios de prueba se compilaron en ramas
 aparte y no se listan.
 
+## 0.5.3 (build 24)
+
+- Menús táctiles: los bordes y la esquina de las ventanas flotantes (Check Tracker, etc.) se pueden
+  arrastrar en cualquier dirección para redimensionarlas, y en lo que no tiene scroll vertical (por
+  ejemplo los selectores de color) el arrastre vertical va al control en vez de perderse.
+- Presets (Settings → Presets): los botones Apply, Edit y Delete ya no quedan aplastados en pantallas
+  de teléfono.
+
 ## 0.5.2 (build 23)
 
 - **Import JSON from Files** (menú Randomizer, junto a Spoiler File, y Network → Anchor): carga el spoiler
