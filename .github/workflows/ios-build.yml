@@ -9,6 +9,12 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      runner:
+        description: "Where to build: github (hosted macOS) or mac (Mati's Mac, self-hosted runner)"
+        type: choice
+        options: [github, mac]
+        default: github
 
 concurrency:
   group: ios-build-${{ github.ref }}
@@ -27,7 +33,7 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
 
@@ -42,25 +48,45 @@ jobs:
 
   ios-build:
     name: Full app (unsigned iPhoneOS)
-    runs-on: macos-15
+    runs-on: ${{ inputs.runner == 'mac' && fromJSON('["self-hosted","macOS","ARM64","mati-mac"]') || 'macos-15' }}
     timeout-minutes: 120
     needs: repository-safety
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          clean: ${{ inputs.runner != 'mac' }}
+
+      # On the Mac the sources and build folders are reused between builds: return the pinned sources to
+      # their committed state so this branch's patches apply from scratch, and drop old packages.
+      - name: Reset reused sources (Mac runner)
+        if: inputs.runner == 'mac'
+        run: |
+          rm -rf artifacts
+          if [ -d sources ]; then
+            for repo in sources/*/; do
+              [ -d "$repo/.git" ] || continue
+              git -C "$repo" reset -q --hard
+              git -C "$repo" clean -qffdx
+              git -C "$repo" submodule foreach --recursive 'git reset -q --hard && git clean -qffdx'
+            done
+          fi
 
       - name: Select the newest installed Xcode
+        if: inputs.runner != 'mac'
         run: |
           newest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -1)"
           if [ -n "$newest" ]; then sudo xcode-select -s "$newest/Contents/Developer"; fi
           xcodebuild -version
 
       - name: Install build tools and native test dependencies
+        if: inputs.runner != 'mac'
         run: >-
           brew install cmake pkgconf libzip
 
       - name: Cache host and iOS dependencies
-        uses: actions/cache@v6
+        if: inputs.runner != 'mac'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             build-ios-soh/_deps
