@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 7951c1041..23af73ec9 100644
+index eb3c38752..2efc8c805 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -1,6 +1,14 @@
@@ -1010,7 +1010,7 @@ index 391e374d7..8ce40ca28 100644
          .PreFunc([&](WidgetInfo& info) {
              auto options = std::static_pointer_cast<UIWidgets::CheckboxOptions>(info.options);
 diff --git a/soh/soh/Extractor/Extract.cpp b/soh/soh/Extractor/Extract.cpp
-index 89da6e1b7..568cff148 100644
+index de16a265a..b8d98a7d2 100644
 --- a/soh/soh/Extractor/Extract.cpp
 +++ b/soh/soh/Extractor/Extract.cpp
 @@ -244,6 +244,16 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
@@ -1058,7 +1058,7 @@ index df5091949..ff6dba712 100644
      SohGui::mSohMenu->AddWidget(path, "AnchorAdminMenu", WIDGET_CUSTOM)
          .CustomFunction(AnchorAdminMenu)
 diff --git a/soh/soh/OTRGlobals.cpp b/soh/soh/OTRGlobals.cpp
-index 1b4f62c47..d61c005ca 100644
+index 67bd1777d..05ad9c24d 100644
 --- a/soh/soh/OTRGlobals.cpp
 +++ b/soh/soh/OTRGlobals.cpp
 @@ -64,6 +64,9 @@
@@ -1110,7 +1110,7 @@ index 1b4f62c47..d61c005ca 100644
      ScaleImGui();
  }
  
-@@ -587,6 +614,21 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -592,6 +619,21 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
              case ES_EXTRACT_ARGS: {
  #if !defined(__SWITCH__) && !defined(__WIIU__)
                  if (args.empty()) {
@@ -1132,7 +1132,7 @@ index 1b4f62c47..d61c005ca 100644
                      SohGui::RegisterPopup(
                          "Run Ship of Harkinian", "All files have been processed. Run SoH?", "Yes", "No",
                          [&]() {
-@@ -601,6 +643,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -606,6 +648,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                              }
                          },
                          [&]() { exit(0); });
@@ -1140,7 +1140,7 @@ index 1b4f62c47..d61c005ca 100644
                      break;
                  }
                  file = args.at(0);
-@@ -644,9 +687,16 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -651,9 +694,16 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                              std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName));
  
                          if (!ootO2RExists) {
@@ -1157,7 +1157,7 @@ index 1b4f62c47..d61c005ca 100644
                          } else {
                              extractStep = ES_VERIFY;
                          }
-@@ -672,6 +722,17 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -679,6 +729,17 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                          continue;
                      }
                      case PS_FIRST: {
@@ -1175,7 +1175,7 @@ index 1b4f62c47..d61c005ca 100644
                          if (!extract.ManuallySearchForRomMatchingType(RomSearchMode::Both)) {
                              promptStep = PS_FILE_CHECK;
                              continue;
-@@ -684,6 +745,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -695,6 +756,7 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                              extractCount = 0;
                              totalExtract = 0;
                          });
@@ -1183,7 +1183,7 @@ index 1b4f62c47..d61c005ca 100644
                          continue;
                      }
                      case PS_SECOND: {
-@@ -717,9 +779,19 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -739,9 +801,19 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                      std::filesystem::exists(Ship::Context::LocateFileAcrossAppDirs("oot.o2r", appShortName));
  
                  if (!ootO2RExists) {
@@ -1203,7 +1203,7 @@ index 1b4f62c47..d61c005ca 100644
                  }
                  extractDone = true;
                  continue;
-@@ -752,7 +824,14 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
+@@ -774,7 +846,14 @@ void OTRGlobals::RunExtract(int argc, char* argv[]) {
                  try {
                      extractionTask->get();
                  } catch (const std::exception& e) {
@@ -1216,9 +1216,9 @@ index 1b4f62c47..d61c005ca 100644
                      SohGui::RegisterPopup("Extraction Crashed", e.what(), "Close", "", []() { exit(1); });
 +#endif
                  }
-                 extractionTask.reset();
-             } else {
-@@ -999,7 +1078,7 @@ OTRGlobals::~OTRGlobals() {
+                 lastExtractFailed = extractFailed;
+                 if (extractFailed) {
+@@ -1027,7 +1106,7 @@ OTRGlobals::~OTRGlobals() {
  }
  
  void OTRGlobals::ScaleImGui() {
@@ -1227,7 +1227,7 @@ index 1b4f62c47..d61c005ca 100644
      if (imGuiScaleIndex == previousImGuiScaleIndex) {
          return;
      }
-@@ -1020,7 +1099,20 @@ bool OTRGlobals::HasOriginal() {
+@@ -1048,7 +1127,20 @@ bool OTRGlobals::HasOriginal() {
      return hasOriginal;
  }
  
@@ -1643,7 +1643,7 @@ index 4190955a9..a27c529e0 100644
      }
  }
 diff --git a/soh/src/code/main.c b/soh/src/code/main.c
-index 98c632665..05922fdf1 100644
+index 4e68d5da1..b66376894 100644
 --- a/soh/src/code/main.c
 +++ b/soh/src/code/main.c
 @@ -43,8 +43,9 @@ void Main_LogSystemHeap(void) {
@@ -1657,10 +1657,10 @@ index 98c632665..05922fdf1 100644
      AllocConsole();
      (void)freopen("CONIN$", "r", stdin);
      (void)freopen("CONOUT$", "w", stdout);
-@@ -54,8 +55,9 @@ int SDL_main(int argc, char* argv[]) {
- #endif
-     // Allow non-ascii characters for Windows
+@@ -56,8 +57,9 @@ int SDL_main(int argc, char* argv[]) {
      setlocale(LC_ALL, ".UTF8");
+     // Keep '.' as the decimal point, user locale may use ','
+     setlocale(LC_NUMERIC, "C");
 +#endif
  
 -#else //_WIN32
@@ -1669,7 +1669,7 @@ index 98c632665..05922fdf1 100644
  #endif
      GameConsole_Init();
 diff --git a/soh/src/code/z_parameter.c b/soh/src/code/z_parameter.c
-index 524ecd89f..2a3a59b95 100644
+index 3681efd1c..c4661b4d8 100644
 --- a/soh/src/code/z_parameter.c
 +++ b/soh/src/code/z_parameter.c
 @@ -19,6 +19,13 @@
@@ -1686,7 +1686,7 @@ index 524ecd89f..2a3a59b95 100644
  #include "soh/Enhancements/gameplaystats.h"
  #include "soh/ObjectExtension/ActorMaximumHealth.h"
  #include "soh/Enhancements/speedrun/Speedrun.h"
-@@ -4155,13 +4162,78 @@ void Interface_DrawItemButtons(PlayState* play) {
+@@ -4138,13 +4145,78 @@ void Interface_DrawItemButtons(PlayState* play) {
          C_Down_BTN_Pos[0] = OTRGetRectDimensionFromRightEdge(C_Down_BTN_Pos_ori[0]);
      }
  
@@ -1766,7 +1766,7 @@ index 524ecd89f..2a3a59b95 100644
      gDPSetEnvColor(OVERLAY_DISP++, 0, 0, 0, 255);
  
      OVERLAY_DISP = Gfx_TextureIA8(OVERLAY_DISP, gButtonBackgroundTex, BBtn_Size, BBtn_Size, PosX_BtnB, PosY_BtnB,
-@@ -4170,27 +4242,27 @@ void Interface_DrawItemButtons(PlayState* play) {
+@@ -4153,27 +4225,27 @@ void Interface_DrawItemButtons(PlayState* play) {
      // C-Left Button Color & Texture
      gDPPipeSync(OVERLAY_DISP++);
      gDPSetPrimColor(OVERLAY_DISP++, 0, 0, cLeftButtonColor.r, cLeftButtonColor.g, cLeftButtonColor.b,
@@ -1806,7 +1806,7 @@ index 524ecd89f..2a3a59b95 100644
  
      if ((pauseCtx->state < 8) || (pauseCtx->state >= 18)) {
          if ((play->pauseCtx.state != 0) || (play->pauseCtx.debugState != 0)) {
-@@ -4246,13 +4318,15 @@ void Interface_DrawItemButtons(PlayState* play) {
+@@ -4229,13 +4301,15 @@ void Interface_DrawItemButtons(PlayState* play) {
                  temp = interfaceCtx->healthAlpha;
              }
  
@@ -1826,7 +1826,7 @@ index 524ecd89f..2a3a59b95 100644
              gDPSetEnvColor(OVERLAY_DISP++, 0, 0, 0, 0);
              gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
                                PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
-@@ -4261,9 +4335,15 @@ void Interface_DrawItemButtons(PlayState* play) {
+@@ -4244,9 +4318,15 @@ void Interface_DrawItemButtons(PlayState* play) {
                                     G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMASK, G_TX_NOMASK,
                                     G_TX_NOLOD, G_TX_NOLOD);
  
@@ -1845,7 +1845,7 @@ index 524ecd89f..2a3a59b95 100644
          }
  
          sCUpTimer--;
-@@ -4395,15 +4475,30 @@ void Interface_DrawItemButtons(PlayState* play) {
+@@ -4378,15 +4458,30 @@ void Interface_DrawItemButtons(PlayState* play) {
                  ItemIconPos[2][1] = ItemIconPos_ori[2][1];
              }
  
@@ -1879,7 +1879,7 @@ index 524ecd89f..2a3a59b95 100644
              }
  
              OVERLAY_DISP = Gfx_TextureIA8(OVERLAY_DISP, ((u8*)gButtonBackgroundTex), 32, 32, ItemIconPos[temp - 1][0],
-@@ -4494,9 +4589,14 @@ void Interface_DrawItemIconTexture(PlayState* play, void* texture, s16 button) {
+@@ -4477,9 +4572,14 @@ void Interface_DrawItemIconTexture(PlayState* play, void* texture, s16 button) {
                                          { DPAD_DOWN_X + X_Margins_DPad_Items, DPAD_DOWN_Y + Y_Margins_DPad_Items },
                                          { DPAD_LEFT_X + X_Margins_DPad_Items, DPAD_LEFT_Y + Y_Margins_DPad_Items },
                                          { DPAD_RIGHT_X + X_Margins_DPad_Items, DPAD_RIGHT_Y + Y_Margins_DPad_Items } };
@@ -1897,7 +1897,7 @@ index 524ecd89f..2a3a59b95 100644
      s16 DPad_ItemsOffset[4][2] = {
          { 7, -8 },         // Up
          { 7, 24 },         // Down
-@@ -4656,13 +4756,37 @@ void Interface_DrawItemIconTexture(PlayState* play, void* texture, s16 button) {
+@@ -4639,13 +4739,37 @@ void Interface_DrawItemIconTexture(PlayState* play, void* texture, s16 button) {
          ItemIconPos[3][1] = ItemIconPos_ori[3][1];
      }
  
@@ -1938,7 +1938,7 @@ index 524ecd89f..2a3a59b95 100644
  
      CLOSE_DISPS(play->state.gfxCtx);
  }
-@@ -4905,6 +5029,28 @@ void Interface_DrawAmmoCount(PlayState* play, s16 button, s16 alpha) {
+@@ -4888,6 +5012,28 @@ void Interface_DrawAmmoCount(PlayState* play, s16 button, s16 alpha) {
          ItemIconPos[3][1] = ItemIconPos_ori[3][1];
      }
  
@@ -1967,7 +1967,7 @@ index 524ecd89f..2a3a59b95 100644
      OPEN_DISPS(play->state.gfxCtx);
  
      i = gSaveContext.equips.buttonItems[button];
-@@ -4962,11 +5108,16 @@ void Interface_DrawAmmoCount(PlayState* play, s16 button, s16 alpha) {
+@@ -4945,11 +5091,16 @@ void Interface_DrawAmmoCount(PlayState* play, s16 button, s16 alpha) {
  
  void Interface_DrawActionButton(PlayState* play, f32 x, f32 y) {
      InterfaceContext* interfaceCtx = &play->interfaceCtx;
@@ -1985,7 +1985,7 @@ index 524ecd89f..2a3a59b95 100644
      Matrix_RotateX(interfaceCtx->unk_1F4 / 10000.0f, MTXMODE_APPLY);
  
      gSPMatrix(OVERLAY_DISP++, MATRIX_NEWMTX(play->state.gfxCtx), G_MTX_MODELVIEW | G_MTX_LOAD);
-@@ -5158,6 +5309,10 @@ void Interface_Draw(PlayState* play) {
+@@ -5141,6 +5292,10 @@ void Interface_Draw(PlayState* play) {
      s16 svar5;
      s16 timerId;
      bool fullUi = !CVarGetInteger(CVAR_ENHANCEMENT("MinimalUI"), 0) || !R_MINIMAP_DISABLED || play->pauseCtx.state != 0;
@@ -1996,7 +1996,7 @@ index 524ecd89f..2a3a59b95 100644
      // #region SOH [NTSC]
      s32 languageOffset = gSaveContext.language;
  
-@@ -5453,7 +5608,8 @@ void Interface_Draw(PlayState* play) {
+@@ -5436,7 +5591,8 @@ void Interface_Draw(PlayState* play) {
          }
  
          gDPPipeSync(OVERLAY_DISP++);
@@ -2006,7 +2006,7 @@ index 524ecd89f..2a3a59b95 100644
          gDPSetCombineMode(OVERLAY_DISP++, G_CC_MODULATERGBA_PRIM, G_CC_MODULATERGBA_PRIM);
  
          if (!(interfaceCtx->unk_1FA)) {
-@@ -5473,7 +5629,7 @@ void Interface_Draw(PlayState* play) {
+@@ -5456,7 +5612,7 @@ void Interface_Draw(PlayState* play) {
                      gDPPipeSync(OVERLAY_DISP++);
                      gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE,
                                        0, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);
@@ -2015,7 +2015,7 @@ index 524ecd89f..2a3a59b95 100644
                  }
              }
          } else {
-@@ -5527,10 +5683,20 @@ void Interface_Draw(PlayState* play) {
+@@ -5510,10 +5666,20 @@ void Interface_Draw(PlayState* play) {
                  BbtnPosX = OTRGetRectDimensionFromRightEdge(R_B_LABEL_X(languageOffset) + X_Margins_BtnB_label);
                  BbtnPosY = R_B_LABEL_Y(languageOffset) + Y_Margins_BtnB_label;
              }
@@ -2037,7 +2037,7 @@ index 524ecd89f..2a3a59b95 100644
  
              gDPLoadTextureBlock_4b(OVERLAY_DISP++, interfaceCtx->doActionSegment[1], G_IM_FMT_IA, DO_ACTION_TEX_WIDTH(),
                                     DO_ACTION_TEX_HEIGHT(), 0, G_TX_NOMIRROR | G_TX_WRAP, G_TX_NOMIRROR | G_TX_WRAP,
-@@ -5546,39 +5712,42 @@ void Interface_Draw(PlayState* play) {
+@@ -5529,39 +5695,42 @@ void Interface_Draw(PlayState* play) {
  
          // C-Left Button Icon & Ammo Count
          if (gSaveContext.equips.buttonItems[1] < 0xF0) {
@@ -2086,7 +2086,7 @@ index 524ecd89f..2a3a59b95 100644
          }
  
          if (CVarGetInteger(CVAR_ENHANCEMENT("DpadEquips"), 0) != 0) {
-@@ -5732,9 +5901,28 @@ void Interface_Draw(PlayState* play) {
+@@ -5715,9 +5884,28 @@ void Interface_Draw(PlayState* play) {
              rAIconY = rAIconY_ori;
              rAIconX = rAIconX_ori;
          }
@@ -2116,7 +2116,7 @@ index 524ecd89f..2a3a59b95 100644
          if (fullUi) {
              Interface_DrawActionButton(play, PosX_BtnA, PosY_BtnA);
          }
-@@ -5742,10 +5930,11 @@ void Interface_Draw(PlayState* play) {
+@@ -5725,10 +5913,11 @@ void Interface_Draw(PlayState* play) {
          gSPSetGeometryMode(OVERLAY_DISP++, G_CULL_BACK);
          gDPSetCombineLERP(OVERLAY_DISP++, PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0,
                            PRIMITIVE, ENVIRONMENT, TEXEL0, ENVIRONMENT, TEXEL0, 0, PRIMITIVE, 0);

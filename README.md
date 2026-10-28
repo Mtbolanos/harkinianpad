@@ -1,14 +1,14 @@
 # HarkinianPad · fork de mtbolanos
 
 <p align="center">
-  <strong>Ocarina of Time vía Ship of Harkinian 9.3.0, nativo en iPhone y iPad.</strong><br>
+  <strong>Ocarina of Time vía Ship of Harkinian 9.3.1, nativo en iPhone y iPad.</strong><br>
   Fork de <a href="https://github.com/chrissotraidis/harkinianpad">HarkinianPad</a> de chrissotraidis,
   actualizado a la última versión de upstream, con red (Anchor) y ProMotion de verdad.
 </p>
 
 <p align="center">
   <a href="https://github.com/Mtbolanos/harkinianpad/actions/workflows/ios-build.yml"><img alt="Build iOS" src="https://github.com/Mtbolanos/harkinianpad/actions/workflows/ios-build.yml/badge.svg"></a>
-  <img alt="Ship of Harkinian 9.3.0" src="https://img.shields.io/badge/Ship%20of%20Harkinian-9.3.0%20Dewey-E3A72F">
+  <img alt="Ship of Harkinian 9.3.1" src="https://img.shields.io/badge/Ship%20of%20Harkinian-9.3.1%20Dewey-E3A72F">
   <img alt="iOS 15+" src="https://img.shields.io/badge/iOS%20%2F%20iPadOS-15%2B-0A84FF?logo=apple">
   <img alt="Anchor" src="https://img.shields.io/badge/Anchor-habilitado-30D158">
   <img alt="ProMotion" src="https://img.shields.io/badge/ProMotion-120%20Hz-5E5CE6">
@@ -38,7 +38,7 @@ render en Metal y controles táctiles personalizables. Hice este fork porque que
 
 | | HarkinianPad 0.2.1 (original) | Este fork 0.5.3 |
 |---|---|---|
-| Upstream | `develop` (9.2.3 + 301 commits) | **Ship of Harkinian 9.3.0 "Dewey"** |
+| Upstream | `develop` (9.2.3 + 301 commits) | **Ship of Harkinian 9.3.1 "Dewey"** |
 | Fuentes | Forks propios de Shipwright y libultraship | Upstream oficial fijado por commit + parches revisables en [`patches/`](patches/) |
 | Extracción de la ROM | ZAPD/OTRExporter | **Torch**, el extractor oficial de 9.3.0 |
 | Menú Network | Deshabilitado | **Anchor, Sail y Crowd Control** (SDL2_net 2.4.0 estático) |
@@ -133,7 +133,7 @@ scripts/package-ios.sh
 El script descarga los commits exactos de upstream ([`sources.lock.json`](sources.lock.json)),
 aplica y verifica los parches, genera el `soh.o2r` sin ROM con el empaquetador
 oficial y compila. El resultado es
-`artifacts/HarkinianPad-0.5.3-preview.24-unsigned.ipa`. Fírmalo con tu
+`artifacts/HarkinianPad-0.5.4-preview.25-unsigned.ipa`. Fírmalo con tu
 herramienta de sideloading de siempre.
 
 El código actual compila para arm64 con iOS/iPadOS 15 o superior.
@@ -170,8 +170,8 @@ compatibles con SDL2.
 
 ```mermaid
 flowchart LR
-    A["Ship of Harkinian 9.3.0<br>(upstream oficial)"] --> C["Parches iOS<br>patches/"]
-    B["libultraship 62e973a"] --> C
+    A["Ship of Harkinian 9.3.1<br>(upstream oficial)"] --> C["Parches iOS<br>patches/"]
+    B["libultraship da6daf1"] --> C
     C --> D["Overlays iOS<br>ios/ · port/"]
     D --> E["IPA sin firmar<br>(sin ROM)"]
     F["Tu ROM"] --> G["Extracción con Torch<br>en el dispositivo"]
