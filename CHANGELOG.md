@@ -3,6 +3,13 @@
 Versión y build de cada IPA (`version.json`). Los builds intermedios de prueba se compilaron en ramas
 aparte y no se listan.
 
+## 0.5.4 (build 25)
+
+- Actualizado a **Ship of Harkinian 9.3.1**: correcciones de Anchor, de la lógica y el tracker del
+  randomizer, del slider de bombchus sin partida cargada y de un acceso fuera de rango en el audio.
+- libultraship `da6daf1`: la configuración se guarda de forma atómica (no se corrompe si iOS cierra la
+  app mientras guarda) y correcciones de texturas HD y env mapping.
+
 ## 0.5.3 (build 24)
 
 - Menús táctiles: los bordes y la esquina de las ventanas flotantes (Check Tracker, etc.) se pueden

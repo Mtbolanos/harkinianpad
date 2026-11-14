@@ -1,5 +1,5 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 08cc7915..34c3369d 100644
+index 08cc791..34c3369 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -12,6 +12,9 @@ option(DISABLE_DLL_LOADER "Disable dynamic library loading support" OFF)
@@ -13,7 +13,7 @@ index 08cc7915..34c3369d 100644
      option(BUNDLE_ID "Bundle ID for xcode signing" "com.example.libultraship")
      set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
 diff --git a/cmake/dependencies/common.cmake b/cmake/dependencies/common.cmake
-index 80dec56e..c66f090b 100644
+index 7e5c4b6..7574bbd 100644
 --- a/cmake/dependencies/common.cmake
 +++ b/cmake/dependencies/common.cmake
 @@ -9,7 +9,7 @@ set(imgui_apply_patch_command ${CMAKE_COMMAND} -Dpatch_file=${imgui_fixes_and_co
@@ -34,36 +34,7 @@ index 80dec56e..c66f090b 100644
          PATCH_COMMAND ${stormlib_apply_patch_command}
      )
      FetchContent_MakeAvailable(StormLib)
-@@ -52,13 +52,26 @@ endif()
- 
- #=================== STB ===================
- set(STB_DIR ${CMAKE_BINARY_DIR}/_deps/stb)
--file(DOWNLOAD "https://github.com/nothings/stb/raw/0bc88af4de5fb022db643c2d8e549a0927749354/stb_image.h" "${STB_DIR}/stb_image.h")
-+set(STB_IMAGE_PATH "${STB_DIR}/stb_image.h")
-+set(STB_IMAGE_SHA256
-+    c54b15a689e6a1f32c75e2ec23afa442e3e0e37e894b73c1974d08679b20dd5c)
-+if(EXISTS "${STB_IMAGE_PATH}")
-+    file(SHA256 "${STB_IMAGE_PATH}" STB_IMAGE_EXISTING_SHA256)
-+endif()
-+if(NOT STB_IMAGE_EXISTING_SHA256 STREQUAL STB_IMAGE_SHA256)
-+    file(DOWNLOAD
-+        "https://raw.githubusercontent.com/nothings/stb/0bc88af4de5fb022db643c2d8e549a0927749354/stb_image.h"
-+        "${STB_IMAGE_PATH}"
-+        EXPECTED_HASH SHA256=${STB_IMAGE_SHA256}
-+        TLS_VERIFY ON
-+    )
-+endif()
- file(WRITE "${STB_DIR}/stb_impl.c" "#define STB_IMAGE_IMPLEMENTATION\n#include \"stb_image.h\"")
- 
- add_library(stb STATIC)
- 
- target_sources(stb PRIVATE
--    ${STB_DIR}/stb_image.h
-+    ${STB_IMAGE_PATH}
-     ${STB_DIR}/stb_impl.c
- )
- 
-@@ -97,7 +110,7 @@ endif()
+@@ -130,7 +130,7 @@ endif()
  FetchContent_Declare(
      ThreadPool
      GIT_REPOSITORY https://github.com/bshoshany/thread-pool.git
@@ -72,7 +43,7 @@ index 80dec56e..c66f090b 100644
  )
  FetchContent_MakeAvailable(ThreadPool)
  
-@@ -307,4 +320,4 @@ if(NOT TARGET libtcc)
+@@ -340,4 +340,4 @@ if(NOT TARGET libtcc)
      endif()
  endif()
  
@@ -80,7 +51,7 @@ index 80dec56e..c66f090b 100644
 \ No newline at end of file
 +endif() # ENABLE_SCRIPTING
 diff --git a/cmake/dependencies/git-patch.cmake b/cmake/dependencies/git-patch.cmake
-index deb3e35d..70b39993 100644
+index deb3e35..70b3999 100644
 --- a/cmake/dependencies/git-patch.cmake
 +++ b/cmake/dependencies/git-patch.cmake
 @@ -27,35 +27,23 @@ function(patch_if_needed)
@@ -133,7 +104,7 @@ index deb3e35d..70b39993 100644
      message(STATUS "Successfully patched with ${patch_file}")
  endif()
 diff --git a/cmake/dependencies/ios.cmake b/cmake/dependencies/ios.cmake
-index aad5c586..8842b92e 100644
+index aad5c58..8842b92 100644
 --- a/cmake/dependencies/ios.cmake
 +++ b/cmake/dependencies/ios.cmake
 @@ -3,22 +3,62 @@ include(FetchContent)
@@ -239,7 +210,7 @@ index aad5c586..8842b92e 100644
  list(APPEND ADDITIONAL_LIB_INCLUDES ${metalcpp_SOURCE_DIR})
 diff --git a/cmake/dependencies/patches/sdl2-uikit-controller-presses.patch b/cmake/dependencies/patches/sdl2-uikit-controller-presses.patch
 new file mode 100644
-index 00000000..5cc72d07
+index 0000000..5cc72d0
 --- /dev/null
 +++ b/cmake/dependencies/patches/sdl2-uikit-controller-presses.patch
 @@ -0,0 +1,18 @@
@@ -263,7 +234,7 @@ index 00000000..5cc72d07
 +     if (!SDL_AppleTVRemoteOpenedAsJoystick) {
 diff --git a/cmake/dependencies/patches/sdl2-uikit-orientation.patch b/cmake/dependencies/patches/sdl2-uikit-orientation.patch
 new file mode 100644
-index 00000000..b701a394
+index 0000000..b701a39
 --- /dev/null
 +++ b/cmake/dependencies/patches/sdl2-uikit-orientation.patch
 @@ -0,0 +1,133 @@
@@ -402,7 +373,7 @@ index 00000000..b701a394
 +     fullscreen = CGRectEqualToRect(screen.bounds, frame);
 diff --git a/cmake/dependencies/patches/sdl2-uikit-scenes.patch b/cmake/dependencies/patches/sdl2-uikit-scenes.patch
 new file mode 100644
-index 00000000..cc87e7e4
+index 0000000..cc87e7e
 --- /dev/null
 +++ b/cmake/dependencies/patches/sdl2-uikit-scenes.patch
 @@ -0,0 +1,269 @@
@@ -676,7 +647,7 @@ index 00000000..cc87e7e4
 +             orientation = SDL_ORIENTATION_PORTRAIT;
 +             break;
 diff --git a/cmake/ios-toolchain-populate.cmake b/cmake/ios-toolchain-populate.cmake
-index eb93fea4..644bcc26 100644
+index eb93fea..644bcc2 100644
 --- a/cmake/ios-toolchain-populate.cmake
 +++ b/cmake/ios-toolchain-populate.cmake
 @@ -1,4 +1,6 @@
@@ -695,7 +666,7 @@ index eb93fea4..644bcc26 100644
 \ No newline at end of file
 +include(${CMAKE_IOS_TOOLCHAIN_FILE})
 diff --git a/include/fast/backends/gfx_metal.h b/include/fast/backends/gfx_metal.h
-index 1d452102..d769eb1b 100644
+index 1d45210..d769eb1 100644
 --- a/include/fast/backends/gfx_metal.h
 +++ b/include/fast/backends/gfx_metal.h
 @@ -29,6 +29,7 @@ class Device;
@@ -725,7 +696,7 @@ index 1d452102..d769eb1b 100644
      uint32_t mMsaaNumQualityLevels[METAL_MAX_MULTISAMPLE_SAMPLE_COUNT];
  
 diff --git a/include/fast/backends/gfx_sdl.h b/include/fast/backends/gfx_sdl.h
-index 79042f4e..70a353bd 100644
+index 79042f4..70a353b 100644
 --- a/include/fast/backends/gfx_sdl.h
 +++ b/include/fast/backends/gfx_sdl.h
 @@ -59,6 +59,9 @@ class GfxWindowBackendSDL2 final : public GfxWindowBackend {
@@ -739,7 +710,7 @@ index 79042f4e..70a353bd 100644
      int mBsdTick; // store kern.clockrate's tick (microseconds) to adjust sleep timing
  #endif
 diff --git a/include/libultraship/bridge/windowbridge.h b/include/libultraship/bridge/windowbridge.h
-index e1a1f017..7c60f903 100644
+index e1a1f01..7c60f90 100644
 --- a/include/libultraship/bridge/windowbridge.h
 +++ b/include/libultraship/bridge/windowbridge.h
 @@ -10,6 +10,13 @@ extern "C" {
@@ -757,7 +728,7 @@ index e1a1f017..7c60f903 100644
  API_EXPORT uint32_t WindowGetWidth();
  
 diff --git a/include/ship/audio/Audio.h b/include/ship/audio/Audio.h
-index 92513091..9e1d69db 100644
+index 9251309..9e1d69d 100644
 --- a/include/ship/audio/Audio.h
 +++ b/include/ship/audio/Audio.h
 @@ -68,6 +68,9 @@ class Audio {
@@ -771,7 +742,7 @@ index 92513091..9e1d69db 100644
      /** @brief (Re)initialises the AudioPlayer for the current backend and channel settings. */
      void InitAudioPlayer();
 diff --git a/include/ship/audio/AudioPlayer.h b/include/ship/audio/AudioPlayer.h
-index 6ac86f16..a5847afa 100644
+index 6ac86f1..a5847af 100644
 --- a/include/ship/audio/AudioPlayer.h
 +++ b/include/ship/audio/AudioPlayer.h
 @@ -71,6 +71,15 @@ class AudioPlayer {
@@ -800,7 +771,7 @@ index 6ac86f16..a5847afa 100644
  #endif
  
 diff --git a/include/ship/audio/SDLAudioPlayer.h b/include/ship/audio/SDLAudioPlayer.h
-index ac61dd36..b440c059 100644
+index ac61dd3..b440c05 100644
 --- a/include/ship/audio/SDLAudioPlayer.h
 +++ b/include/ship/audio/SDLAudioPlayer.h
 @@ -1,5 +1,6 @@
@@ -828,7 +799,7 @@ index ac61dd36..b440c059 100644
  };
  } // namespace Ship
 diff --git a/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h b/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h
-index 33f9a664..f5356b9a 100644
+index 33f9a66..f5356b9 100644
 --- a/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h
 +++ b/include/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.h
 @@ -1,90 +1,48 @@
@@ -946,7 +917,7 @@ index 33f9a664..f5356b9a 100644
  } // namespace Ship
 diff --git a/include/ship/controller/physicaldevice/ControllerSlotAssignments.h b/include/ship/controller/physicaldevice/ControllerSlotAssignments.h
 new file mode 100644
-index 00000000..22b71c35
+index 0000000..22b71c3
 --- /dev/null
 +++ b/include/ship/controller/physicaldevice/ControllerSlotAssignments.h
 @@ -0,0 +1,47 @@
@@ -999,7 +970,7 @@ index 00000000..22b71c35
 +} // namespace Ship
 diff --git a/include/ship/window/gui/IOSTouchScroll.h b/include/ship/window/gui/IOSTouchScroll.h
 new file mode 100644
-index 00000000..ef23d773
+index 0000000..ef23d77
 --- /dev/null
 +++ b/include/ship/window/gui/IOSTouchScroll.h
 @@ -0,0 +1,29 @@
@@ -1033,7 +1004,7 @@ index 00000000..ef23d773
 +} // namespace Ship::IOSTouchScroll
 +#endif
 diff --git a/src/fast/CMakeLists.txt b/src/fast/CMakeLists.txt
-index 66bf70d0..c96c63f6 100644
+index 66bf70d..c96c63f 100644
 --- a/src/fast/CMakeLists.txt
 +++ b/src/fast/CMakeLists.txt
 @@ -41,3 +41,8 @@ endif()
@@ -1046,7 +1017,7 @@ index 66bf70d0..c96c63f6 100644
 +    target_sources(libultraship PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/backends/gfx_ios_external_display.mm)
 +endif()
 diff --git a/src/fast/Fast3dGui.cpp b/src/fast/Fast3dGui.cpp
-index 237a502a..a0077150 100644
+index 237a502..a007715 100644
 --- a/src/fast/Fast3dGui.cpp
 +++ b/src/fast/Fast3dGui.cpp
 @@ -12,6 +12,7 @@
@@ -1181,7 +1152,7 @@ index 237a502a..a0077150 100644
      interpreter->mGameWindowViewport.y = (int16_t)mainPos.y;
      interpreter->mGameWindowViewport.width = (int16_t)size.x;
 diff --git a/src/fast/Fast3dWindow.cpp b/src/fast/Fast3dWindow.cpp
-index 2b77a5f2..dc8efeff 100644
+index 2b77a5f..dc8efef 100644
 --- a/src/fast/Fast3dWindow.cpp
 +++ b/src/fast/Fast3dWindow.cpp
 @@ -84,6 +84,12 @@ void Fast3dWindow::Init() {
@@ -1218,7 +1189,7 @@ index 2b77a5f2..dc8efeff 100644
  
 diff --git a/src/fast/backends/gfx_ios_display.mm b/src/fast/backends/gfx_ios_display.mm
 new file mode 100644
-index 00000000..801ce058
+index 0000000..801ce05
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_display.mm
 @@ -0,0 +1,85 @@
@@ -1309,7 +1280,7 @@ index 00000000..801ce058
 +#endif
 diff --git a/src/fast/backends/gfx_ios_external_display.mm b/src/fast/backends/gfx_ios_external_display.mm
 new file mode 100644
-index 00000000..d75917e6
+index 0000000..d75917e
 --- /dev/null
 +++ b/src/fast/backends/gfx_ios_external_display.mm
 @@ -0,0 +1,280 @@
@@ -1594,7 +1565,7 @@ index 00000000..d75917e6
 +}
 +#endif
 diff --git a/src/fast/backends/gfx_metal.cpp b/src/fast/backends/gfx_metal.cpp
-index 00eaedbc..3da4de52 100644
+index 00eaedb..3da4de5 100644
 --- a/src/fast/backends/gfx_metal.cpp
 +++ b/src/fast/backends/gfx_metal.cpp
 @@ -16,6 +16,7 @@
@@ -1680,7 +1651,7 @@ index 00eaedbc..3da4de52 100644
  
      if (current_framebuffer.mLastZmodeDecal != mCurrentZmodeDecal) {
 diff --git a/src/fast/backends/gfx_sdl2.cpp b/src/fast/backends/gfx_sdl2.cpp
-index 15c5415f..e78f25fd 100644
+index 15c5415..e78f25f 100644
 --- a/src/fast/backends/gfx_sdl2.cpp
 +++ b/src/fast/backends/gfx_sdl2.cpp
 @@ -11,6 +11,11 @@
@@ -1935,7 +1906,7 @@ index 15c5415f..e78f25fd 100644
  
  bool GfxWindowBackendSDL2::IsRunning() {
 diff --git a/src/libultraship/bridge/windowbridge.cpp b/src/libultraship/bridge/windowbridge.cpp
-index 295c4dc2..ca80eb7c 100644
+index 295c4dc..ca80eb7 100644
 --- a/src/libultraship/bridge/windowbridge.cpp
 +++ b/src/libultraship/bridge/windowbridge.cpp
 @@ -2,6 +2,9 @@
@@ -1972,7 +1943,7 @@ index 295c4dc2..ca80eb7c 100644
      return Ship::Context::GetRawInstance()->GetWindow()->GetPosX();
  }
 diff --git a/src/libultraship/controller/controldeck/ControlDeck.cpp b/src/libultraship/controller/controldeck/ControlDeck.cpp
-index c7c96f63..94a0c8eb 100644
+index c7c96f6..94a0c8e 100644
 --- a/src/libultraship/controller/controldeck/ControlDeck.cpp
 +++ b/src/libultraship/controller/controldeck/ControlDeck.cpp
 @@ -7,6 +7,15 @@
@@ -2020,7 +1991,7 @@ index c7c96f63..94a0c8eb 100644
  }
  } // namespace LUS
 diff --git a/src/libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.cpp b/src/libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.cpp
-index c431c346..1bce6004 100644
+index c431c34..1bce600 100644
 --- a/src/libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.cpp
 +++ b/src/libultraship/controller/controldevice/controller/mapping/ControllerDefaultMappings.cpp
 @@ -51,7 +51,7 @@ void ControllerDefaultMappings::SetDefaultKeyboardKeyToButtonMappings(
@@ -2033,7 +2004,7 @@ index c431c346..1bce6004 100644
          { BTN_CDOWN, { Ship::KbScancode::LUS_KB_ARROWKEY_DOWN } },
          { BTN_CLEFT, { Ship::KbScancode::LUS_KB_ARROWKEY_LEFT } },
 diff --git a/src/libultraship/libultra/os.cpp b/src/libultraship/libultra/os.cpp
-index c19241a1..78b3b308 100644
+index c19241a..78b3b30 100644
 --- a/src/libultraship/libultra/os.cpp
 +++ b/src/libultraship/libultra/os.cpp
 @@ -17,6 +17,10 @@ int32_t osContInit(OSMesgQueue* mq, uint8_t* controllerBits, OSContStatus* statu
@@ -2048,10 +2019,10 @@ index c19241a1..78b3b308 100644
  
      return 0;
 diff --git a/src/ship/Context.cpp b/src/ship/Context.cpp
-index 361a1f75..4e2d327b 100644
+index 28a211f..6e540a1 100644
 --- a/src/ship/Context.cpp
 +++ b/src/ship/Context.cpp
-@@ -481,11 +481,6 @@ std::string Context::GetAppBundlePath() {
+@@ -488,11 +488,6 @@ std::string Context::GetAppBundlePath() {
      }
  #endif
  
@@ -2064,7 +2035,7 @@ index 361a1f75..4e2d327b 100644
      return CMAKE_INSTALL_PREFIX;
  #else
 diff --git a/src/ship/audio/Audio.cpp b/src/ship/audio/Audio.cpp
-index 8cc5b12e..b24d7ad7 100644
+index 8cc5b12..b24d7ad 100644
 --- a/src/ship/audio/Audio.cpp
 +++ b/src/ship/audio/Audio.cpp
 @@ -1,6 +1,6 @@
@@ -2116,7 +2087,7 @@ index 8cc5b12e..b24d7ad7 100644
      int32_t channelsSetting =
          mConfig->GetInt("CVars." CVAR_AUDIO_CHANNELS_SETTING, static_cast<int32_t>(AudioChannelsSetting::audioMax));
 diff --git a/src/ship/audio/SDLAudioPlayer.cpp b/src/ship/audio/SDLAudioPlayer.cpp
-index d9f1e44d..e0e601c3 100644
+index d9f1e44..e0e601c 100644
 --- a/src/ship/audio/SDLAudioPlayer.cpp
 +++ b/src/ship/audio/SDLAudioPlayer.cpp
 @@ -21,6 +21,9 @@ void SDLAudioPlayer::DoClose() {
@@ -2151,7 +2122,7 @@ index d9f1e44d..e0e601c3 100644
          SDL_QueueAudio(mDevice, buf, len);
      }
 diff --git a/src/ship/controller/controldevice/controller/ControllerButton.cpp b/src/ship/controller/controldevice/controller/ControllerButton.cpp
-index eced487d..5a55d5d8 100644
+index eced487..5a55d5d 100644
 --- a/src/ship/controller/controldevice/controller/ControllerButton.cpp
 +++ b/src/ship/controller/controldevice/controller/ControllerButton.cpp
 @@ -5,6 +5,10 @@
@@ -2190,7 +2161,7 @@ index eced487d..5a55d5d8 100644
          mapping->SaveToConfig();
      }
 diff --git a/src/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.cpp b/src/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.cpp
-index 7f0397e2..43ba76b0 100644
+index 7f0397e..43ba76b 100644
 --- a/src/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.cpp
 +++ b/src/ship/controller/physicaldevice/ConnectedPhysicalDeviceManager.cpp
 @@ -1,108 +1,218 @@
@@ -2458,7 +2429,7 @@ index 7f0397e2..43ba76b0 100644
  } // namespace Ship
 diff --git a/src/ship/controller/physicaldevice/ControllerSlotAssignments.cpp b/src/ship/controller/physicaldevice/ControllerSlotAssignments.cpp
 new file mode 100644
-index 00000000..b949cd0d
+index 0000000..b949cd0
 --- /dev/null
 +++ b/src/ship/controller/physicaldevice/ControllerSlotAssignments.cpp
 @@ -0,0 +1,133 @@
@@ -2596,7 +2567,7 @@ index 00000000..b949cd0d
 +
 +} // namespace Ship
 diff --git a/src/ship/controller/physicaldevice/SDLAddRemoveDeviceEventHandler.cpp b/src/ship/controller/physicaldevice/SDLAddRemoveDeviceEventHandler.cpp
-index a85c7d7e..b08fcae0 100644
+index a85c7d7..b08fcae 100644
 --- a/src/ship/controller/physicaldevice/SDLAddRemoveDeviceEventHandler.cpp
 +++ b/src/ship/controller/physicaldevice/SDLAddRemoveDeviceEventHandler.cpp
 @@ -20,23 +20,26 @@ void SDLAddRemoveDeviceEventHandler::UpdateElement() {
@@ -2642,7 +2613,7 @@ index a85c7d7e..b08fcae0 100644
      // The connected controller set changed, so re-point the ImGui gamepad
      // backend at it (keeps menu navigation working across hotplug).
 diff --git a/src/ship/window/gui/GameOverlay.cpp b/src/ship/window/gui/GameOverlay.cpp
-index eaea3cd7..5bc888a9 100644
+index eaea3cd..5bc888a 100644
 --- a/src/ship/window/gui/GameOverlay.cpp
 +++ b/src/ship/window/gui/GameOverlay.cpp
 @@ -237,9 +237,10 @@ void GameOverlay::Draw() {
@@ -2660,7 +2631,7 @@ index eaea3cd7..5bc888a9 100644
              const float textWidth = GetStringWidth(overlay.Value.c_str());
              const float textOffset = 40.0f;
 diff --git a/src/ship/window/gui/Gui.cpp b/src/ship/window/gui/Gui.cpp
-index 1f9279bd..3761be17 100644
+index 1f9279b..3761be1 100644
 --- a/src/ship/window/gui/Gui.cpp
 +++ b/src/ship/window/gui/Gui.cpp
 @@ -7,6 +7,14 @@
@@ -2738,7 +2709,7 @@ index 1f9279bd..3761be17 100644
  void Gui::EndFrame() {
 diff --git a/src/ship/window/gui/IOSTouchScroll.cpp b/src/ship/window/gui/IOSTouchScroll.cpp
 new file mode 100644
-index 00000000..2548712f
+index 0000000..2548712
 --- /dev/null
 +++ b/src/ship/window/gui/IOSTouchScroll.cpp
 @@ -0,0 +1,359 @@
