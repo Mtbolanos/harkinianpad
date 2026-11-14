@@ -596,7 +596,7 @@ index fc21dfd50..00a2f4c57 100644
          ImGui::TableNextRow();
          ImGui::TableNextColumn();
 diff --git a/soh/soh/Enhancements/bootcommands.c b/soh/soh/Enhancements/bootcommands.c
-index baf3dc261..817b47814 100644
+index baf3dc261..e25571be0 100644
 --- a/soh/soh/Enhancements/bootcommands.c
 +++ b/soh/soh/Enhancements/bootcommands.c
 @@ -3,6 +3,10 @@
@@ -610,7 +610,7 @@ index baf3dc261..817b47814 100644
  void BootCommands_Init() {
      // Clears vars to prevent randomizer menu from being disabled
      CVarClear(CVAR_GENERAL("NewSeedGenerated"));
-@@ -11,5 +15,25 @@ void BootCommands_Init() {
+@@ -11,5 +15,26 @@ void BootCommands_Init() {
      CVarClear(CVAR_GENERAL("BetterDebugWarpScreenMQModeScene"));
  #if defined(__SWITCH__) || defined(__WIIU__)
      CVarRegisterInteger(CVAR_IMGUI_CONTROLLER_NAV, 1); // always enable controller nav on switch/wii u
@@ -634,6 +634,7 @@ index baf3dc261..817b47814 100644
 +    HarkinianPad_SetNativeHudTouchEnabled(modernTouchControls);
 +    HarkinianPad_SetTouchCameraStickEnabled(CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchCameraStick"), 0));
 +    HarkinianPad_SetTouchHapticsEnabled(CVarGetInteger(CVAR_SETTING("HarkinianPad.TouchHaptics"), 1));
++    HarkinianPad_SetAutoHideTouchControls(CVarGetInteger(CVAR_SETTING("HarkinianPad.AutoHideTouchControls"), 1));
  #endif
  }
 diff --git a/soh/soh/Enhancements/mod_menu.cpp b/soh/soh/Enhancements/mod_menu.cpp
@@ -1010,10 +1011,37 @@ index 391e374d7..8ce40ca28 100644
          .PreFunc([&](WidgetInfo& info) {
              auto options = std::static_pointer_cast<UIWidgets::CheckboxOptions>(info.options);
 diff --git a/soh/soh/Extractor/Extract.cpp b/soh/soh/Extractor/Extract.cpp
-index de16a265a..b8d98a7d2 100644
+index de16a265a..1cb24bbab 100644
 --- a/soh/soh/Extractor/Extract.cpp
 +++ b/soh/soh/Extractor/Extract.cpp
-@@ -244,6 +244,16 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
+@@ -47,7 +47,9 @@
+ 
+ #include <SDL2/SDL_messagebox.h>
+ 
++#include <algorithm>
+ #include <array>
++#include <cctype>
+ #include <fstream>
+ #include <filesystem>
+ #include <unordered_map>
+@@ -226,6 +228,16 @@ void Extractor::FilterRoms(std::vector<std::string>& roms, RomSearchMode searchM
+     }
+ }
+ 
++#ifdef __IOS__
++// Files often keeps a ROM's upper-case extension (.Z64), so compare without case.
++static bool IsIOSRomExtension(const std::filesystem::path& path) {
++    std::string extension = path.extension().string();
++    std::transform(extension.begin(), extension.end(), extension.begin(),
++                   [](unsigned char c) { return std::tolower(c); });
++    return extension == ".n64" || extension == ".z64" || extension == ".v64";
++}
++#endif
++
+ void Extractor::GetRoms(std::vector<std::string>& roms) {
+ #ifdef _WIN32
+     WIN32_FIND_DATAA ffd;
+@@ -244,6 +256,15 @@ void Extractor::GetRoms(std::vector<std::string>& roms) {
      // if (h != nullptr) {
      //    CloseHandle(h);
      //}
@@ -1022,14 +1050,29 @@ index de16a265a..b8d98a7d2 100644
 +        if (file.is_directory()) {
 +            continue;
 +        }
-+        const auto extension = file.path().extension();
-+        if (extension == ".n64" || extension == ".z64" || extension == ".v64") {
++        if (IsIOSRomExtension(file.path())) {
 +            roms.push_back(file.path().string());
 +        }
 +    }
  #elif unix
      // Open the directory of the app.
      DIR* d = opendir(mSearchPath.c_str());
+@@ -483,9 +504,15 @@ bool Extractor::RunFileStandalone(std::string rom) {
+         return false;
+     }
+     auto file = std::filesystem::path(rom);
++#ifdef __IOS__
++    if (!IsIOSRomExtension(file)) {
++        return false;
++    }
++#else
+     if ((file.extension() != ".n64") && (file.extension() != ".z64") && (file.extension() != ".v64")) {
+         return false;
+     }
++#endif
+     SetRomInfo(rom);
+ 
+     if (!ValidateRomSize()) {
 diff --git a/soh/soh/Network/Anchor/Menu.cpp b/soh/soh/Network/Anchor/Menu.cpp
 index df5091949..ff6dba712 100644
 --- a/soh/soh/Network/Anchor/Menu.cpp
@@ -1413,7 +1456,7 @@ index 5ab82274e..4d48721ea 100644
      // Enhancements
      AddWidget(path, "Enhancements", WIDGET_SEPARATOR_TEXT);
 diff --git a/soh/soh/SohGui/SohMenuSettings.cpp b/soh/soh/SohGui/SohMenuSettings.cpp
-index 476f99f3f..1c2433145 100644
+index 476f99f3f..6d10e6ce1 100644
 --- a/soh/soh/SohGui/SohMenuSettings.cpp
 +++ b/soh/soh/SohGui/SohMenuSettings.cpp
 @@ -9,6 +9,10 @@
@@ -1499,11 +1542,23 @@ index 476f99f3f..1c2433145 100644
          })
          .Options(IntSliderOptions().Tooltip(tooltip).Min(20).Max(maxFps).DefaultValue(20).Format(fpsFormat));
      AddWidget(path, "Match Refresh Rate", WIDGET_CVAR_CHECKBOX)
-@@ -436,6 +485,102 @@ void SohMenu::AddMenuSettings() {
+@@ -436,6 +485,126 @@ void SohMenu::AddMenuSettings() {
      path.sidebarName = "Controls";
      path.column = SECTION_COLUMN_1;
      AddSidebarEntry("Settings", "Controls", 2);
 +#ifdef __IOS__
++    AddWidget(path, "Show Touch Controls", WIDGET_BUTTON)
++        .RaceDisable(false)
++        .PreFunc([](WidgetInfo& info) { info.isHidden = !HarkinianPad_TouchControlsHidden(); })
++        .Callback([](WidgetInfo& info) {
++            CVarSetInteger(CVAR_SETTING("HarkinianPad.TouchControls"), 1);
++            CVarSetInteger(CVAR_SETTING("HarkinianPad.AutoHideTouchControls"), 0);
++            Ship::Context::GetRawInstance()->GetWindow()->GetGui()->SaveConsoleVariablesNextFrame();
++            HarkinianPad_ShowTouchControls();
++        })
++        .Options(ButtonOptions().Tooltip(
++            "Closes Settings and shows the touch controller now, even with a controller connected. Turns off "
++            "auto-hide until you turn it back on."));
 +    AddWidget(path, "Touch Controls", WIDGET_CVAR_CHECKBOX)
 +        .CVar(CVAR_SETTING("HarkinianPad.TouchControls"))
 +        .RaceDisable(false)
@@ -1516,7 +1571,19 @@ index 476f99f3f..1c2433145 100644
 +        })
 +        .Options(CheckboxOptions()
 +                     .DefaultValue(true)
-+                     .Tooltip("Shows the touch controller. Disable it when using a physical controller."));
++                     .Tooltip("Shows the touch controller. Turn it off to hide it; Show Touch Controls brings it "
++                              "back."));
++    AddWidget(path, "Auto-hide Touch Controls with Controller", WIDGET_CVAR_CHECKBOX)
++        .CVar(CVAR_SETTING("HarkinianPad.AutoHideTouchControls"))
++        .RaceDisable(false)
++        .Callback([](WidgetInfo& info) {
++            HarkinianPad_SetAutoHideTouchControls(
++                CVarGetInteger(CVAR_SETTING("HarkinianPad.AutoHideTouchControls"), 1));
++        })
++        .Options(CheckboxOptions()
++                     .DefaultValue(true)
++                     .Tooltip("Hides the touch controller while a game controller is connected, and shows it again "
++                              "when the controller disconnects."));
 +    AddWidget(path, "Touch Control Transparency", WIDGET_CVAR_CHECKBOX)
 +        .CVar(CVAR_SETTING("HarkinianPad.TouchControlTransparency"))
 +        .RaceDisable(false)

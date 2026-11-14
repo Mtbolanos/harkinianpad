@@ -3,6 +3,17 @@
 Versión y build de cada IPA (`version.json`). Los builds intermedios de prueba se compilaron en ramas
 aparte y no se listan.
 
+## 0.5.5 (build 26)
+
+- Los toques muy rápidos en los botones táctiles ya no se pierden: una pulsación se mantiene hasta que el
+  juego la lee una vez (el juego lee el control cada 50 ms).
+- **Auto-hide Touch Controls with Controller** (Settings → Controls, activado por defecto): permite dejar
+  los controles táctiles visibles con un mando conectado. **Show Touch Controls** los vuelve a mostrar
+  cuando están ocultos, cierra el menú y desactiva el auto-ocultar.
+- Un dedo que seguía apoyado al ocultarse los controles (por un mando o por el menú) ya no envía entrada.
+- El botón Z bloqueado se muestra en azul.
+- Los ROM con extensión en mayúsculas (.Z64, .N64, .V64) se detectan.
+
 ## 0.5.4 (build 25)
 
 - Actualizado a **Ship of Harkinian 9.3.1**: correcciones de Anchor, de la lógica y el tracker del

@@ -18,6 +18,11 @@ static std::atomic_bool sNativeHudTouchDesired(false);
 // On-screen controls in N64 terms, read by libultraship for player 1 (ShipIOS_GetTouchPadState). The mapping is
 // fixed: touch L is always L, touch C-Up is always C-Up, whatever the controller bindings are.
 static std::atomic<uint32_t> sTouchButtons(0);
+// Buttons pressed since the game last read the controls. The game polls once per logic frame (50 ms at 20 fps),
+// so a tap shorter than that would otherwise be released before it was ever seen.
+static std::atomic<uint32_t> sTouchButtonsTapped(0);
+// When the last tap was recorded: a tap the game could not read in time (its input was blocked) is dropped.
+static std::atomic<double> sTouchTapTime(0.0);
 static std::atomic<float> sTouchStick[2];
 static std::atomic<float> sTouchCamera[2];
 // Settings pushed by the port (its menu and startup); the overlay can exist before the console variables do.
@@ -59,6 +64,7 @@ static void HarkinianPad_TouchHaptic(void) {
 static void HarkinianPad_ApplyTouchControlsState(void);
 // A connected game controller hides the touch controls (the menu button stays).
 static std::atomic_bool sGameControllerConnected(false);
+static std::atomic_bool sAutoHideWithController(true); // "Auto-hide Touch Controls with Controller"
 static bool sAutoHideDisabled = false; // UI tests run with the touch controls always available
 
 // Only real gamepads count (a full gamepad profile); other GameController devices do not hide the controls.
@@ -93,6 +99,8 @@ static void HarkinianPad_PushKey(SDL_Scancode scancode, BOOL pressed) {
     if (bit != 0) {
         if (pressed) {
             sTouchButtons.fetch_or(bit);
+            sTouchButtonsTapped.fetch_or(bit);
+            sTouchTapTime.store(CACurrentMediaTime());
         } else {
             sTouchButtons.fetch_and(~bit);
         }
@@ -229,7 +237,9 @@ static void HarkinianPad_PushKey(SDL_Scancode scancode, BOOL pressed) {
 }
 
 - (void)beginInput {
-    if (self.layoutEditing || self.inputPressed) {
+    // A finger that was already down keeps reporting to a control that was removed (hidden for a controller
+    // or the menu); it must not start input there.
+    if (self.layoutEditing || self.inputPressed || self.window == nil) {
         return;
     }
     self.inputPressed = YES;
@@ -274,6 +284,7 @@ static void HarkinianPad_PushKey(SDL_Scancode scancode, BOOL pressed) {
     }
     self.inputLatched = YES;
     self.accessibilityValue = @"Locked";
+    [self updateAppearance];
     UIImpactFeedbackGenerator* feedback =
         [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
     [feedback impactOccurred];
@@ -403,7 +414,7 @@ static HarkinianPadTouchButton* sMenuButton;
 }
 
 - (void)touchesBegan:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
-    if (self.layoutEditing) {
+    if (self.layoutEditing || self.window == nil) {
         return;
     }
     UITouch* touch = touches.anyObject;
@@ -413,7 +424,7 @@ static HarkinianPadTouchButton* sMenuButton;
 }
 
 - (void)touchesMoved:(NSSet<UITouch*>*)touches withEvent:(UIEvent*)event {
-    if (self.layoutEditing) {
+    if (self.layoutEditing || self.window == nil) {
         return;
     }
     UITouch* touch = touches.anyObject;
@@ -1255,6 +1266,7 @@ static HarkinianPadTouchButton* sMenuButton;
 }
 
 - (void)cancelAllInputs {
+    sTouchButtonsTapped.store(0); // a hidden or interrupted overlay must not leave a tap pending
     [self.controlStick cancelInput];
     [self.cameraStick cancelInput];
     for (HarkinianPadTouchButton* button in self.buttons) {
@@ -1371,7 +1383,8 @@ static void HarkinianPad_ApplyTouchControlsState(void) {
 
     HarkinianPad_InstallMenuButton(window);
     const bool hiddenForController =
-        sGameControllerConnected.load() && !sAutoHideDisabled && !sLayoutEditorRequested &&
+        sGameControllerConnected.load() && sAutoHideWithController.load() && !sAutoHideDisabled &&
+        !sLayoutEditorRequested &&
         !sLayoutEditorActive.load();
     if (!sTouchControlsDesired.load() || sTouchControlsMenuVisible.load() || hiddenForController) {
         if (sTouchOverlay.layoutEditing) {
@@ -1433,6 +1446,35 @@ void HarkinianPad_SetCustomizableTouchControlsEnabled(int enabled) {
         [sTouchOverlay setCustomizableControlsEnabled:customizable];
         HarkinianPad_ApplyTouchControlsState();
     });
+}
+
+void HarkinianPad_SetAutoHideTouchControls(int enabled) {
+    sAutoHideWithController.store(enabled != 0);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        HarkinianPad_ApplyTouchControlsState();
+    });
+}
+
+// "Show Touch Controls": brings the controls back from either kind of hiding (turned off, or hidden for a
+// controller) and keeps them until auto-hide is turned on again. The port has already saved both settings.
+void HarkinianPad_ShowTouchControls(void) {
+    sTouchControlsDesired.store(true);
+    sAutoHideWithController.store(false);
+    dispatch_async(dispatch_get_main_queue(), ^{
+        HarkinianPad_InstallLifecycleObservers();
+        if (sTouchControlsMenuVisible.load()) {
+            // Close the menu as the menu button does, so the controls can be used at once.
+            HarkinianPad_PushKey(SDL_SCANCODE_ESCAPE, YES);
+            HarkinianPad_PushKey(SDL_SCANCODE_ESCAPE, NO);
+        }
+        HarkinianPad_ApplyTouchControlsState();
+    });
+}
+
+// The controls are off, or hidden because a controller is connected (not merely covered by the menu).
+int HarkinianPad_TouchControlsHidden(void) {
+    return !sTouchControlsDesired.load() ||
+           (sGameControllerConnected.load() && sAutoHideWithController.load() && !sAutoHideDisabled);
 }
 
 void HarkinianPad_SetTouchHapticsEnabled(int enabled) {
@@ -1610,7 +1652,11 @@ extern "C" void ShipIOS_SetTouchControlsMenuVisible(int visible) {
 // libultraship reads the on-screen controls for player 1 once per input poll.
 extern "C" int ShipIOS_GetTouchPadState(uint32_t* buttons, float* stickX, float* stickY, float* cameraX,
                                         float* cameraY) {
-    *buttons = sTouchButtons.load();
+    uint32_t tapped = sTouchButtonsTapped.exchange(0);
+    if (CACurrentMediaTime() - sTouchTapTime.load() > 0.2) {
+        tapped = 0;
+    }
+    *buttons = sTouchButtons.load() | tapped;
     *stickX = sTouchStick[0].load();
     *stickY = sTouchStick[1].load();
     *cameraX = sTouchCamera[0].load();

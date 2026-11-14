@@ -133,7 +133,7 @@ scripts/package-ios.sh
 El script descarga los commits exactos de upstream ([`sources.lock.json`](sources.lock.json)),
 aplica y verifica los parches, genera el `soh.o2r` sin ROM con el empaquetador
 oficial y compila. El resultado es
-`artifacts/HarkinianPad-0.5.4-preview.25-unsigned.ipa`. Fírmalo con tu
+`artifacts/HarkinianPad-0.5.5-preview.26-unsigned.ipa`. Fírmalo con tu
 herramienta de sideloading de siempre.
 
 El código actual compila para arm64 con iOS/iPadOS 15 o superior.
